@@ -134,11 +134,27 @@ impl WadupSchema {
         }
     }
 
-    pub fn column(&self, name: &str) -> WadupColumn {
+    pub fn column_str(&self, name: &str) -> WadupColumnString {
         let name = name.as_bytes();
-        WadupColumn {
+        WadupColumnString {
             schema_index: self.schema_index,
-            column_index: unsafe { wadup_metadata_column(self.schema_index, name.as_ptr(), name.len()) }
+            column_index: unsafe { wadup_metadata_column(self.schema_index, name.as_ptr(), name.len(), COLUMN_STR) }
+        }
+    }
+
+    pub fn column_i64(&self, name: &str) -> WadupColumnInt64 {
+        let name = name.as_bytes();
+        WadupColumnInt64 {
+            schema_index: self.schema_index,
+            column_index: unsafe { wadup_metadata_column(self.schema_index, name.as_ptr(), name.len(), COLUMN_I64) }
+        }
+    }
+
+    pub fn column_f64(&self, name: &str) -> WadupColumnFloat64 {
+        let name = name.as_bytes();
+        WadupColumnFloat64 {
+            schema_index: self.schema_index,
+            column_index: unsafe { wadup_metadata_column(self.schema_index, name.as_ptr(), name.len(), COLUMN_F64) }
         }
     }
 
@@ -149,31 +165,50 @@ impl WadupSchema {
     }
 }
 
-pub struct WadupColumn {
+pub struct WadupColumnString {
     schema_index: u32,
     column_index: u32,
 }
 
-impl WadupColumn {
-    pub fn value_str(&self, value: &str) {
+impl WadupColumnString {
+    pub fn value(&self, value: &str) {
         let value = value.as_bytes();
         unsafe {
             wadup_metadata_value_str(self.schema_index, self.column_index, value.as_ptr(), value.len());
         }
     }
+}
 
-    pub fn value_i64(&self, value: i64) {
+pub struct WadupColumnInt64 {
+    schema_index: u32,
+    column_index: u32,
+}
+
+
+impl WadupColumnInt64 {
+    pub fn value(&self, value: i64) {
         unsafe {
             wadup_metadata_value_i64(self.schema_index, self.column_index, value);
         }
     }
+}
 
-    pub fn value_f64(&self, value: f64) {
+pub struct WadupColumnFloat64 {
+    schema_index: u32,
+    column_index: u32,
+}
+
+impl WadupColumnFloat64 {
+    pub fn value(&self, value: f64) {
         unsafe {
             wadup_metadata_value_f64(self.schema_index, self.column_index, value);
         }
     }
 }
+
+const COLUMN_STR: u32 = 1;
+const COLUMN_I64: u32 = 2;
+const COLUMN_F64: u32 = 3;
 
 #[link(wasm_import_module = "host")]
 unsafe extern "C" {
@@ -188,7 +223,7 @@ unsafe extern "C" {
     pub fn wadup_error(error: *const u8, error_length: usize);
 
     fn wadup_metadata_schema(schema_name: *const u8, schema_length: usize) -> u32;
-    fn wadup_metadata_column(schema_index: u32, column_name: *const u8, column_length: usize) -> u32;
+    fn wadup_metadata_column(schema_index: u32, column_name: *const u8, column_length: usize, column_type: u32) -> u32;
     fn wadup_metadata_value_str(schema_index: u32, column_index: u32, value: *const u8, value_length: usize);
     fn wadup_metadata_value_i64(schema_index: u32, column_index: u32, value: i64);
     fn wadup_metadata_value_f64(schema_index: u32, column_index: u32, value: f64);

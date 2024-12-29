@@ -124,7 +124,7 @@ fn wadup_metadata_schema(mut caller: Caller<'_, Context>, schema_name: u32, sche
     Ok(schema_index)
 }
 
-fn wadup_metadata_column(mut caller: Caller<'_, Context>, schema_index: u32, column_name: u32, column_length: u32) -> Result<u32> {
+fn wadup_metadata_column(mut caller: Caller<'_, Context>, schema_index: u32, column_name: u32, column_length: u32, _column_type: u32) -> Result<u32> {
     let memory = caller.get_export("memory").and_then(|v| v.into_memory()).ok_or(anyhow!("wadup_error memory not exported"))?;
     let memory = memory.data(&caller);
 

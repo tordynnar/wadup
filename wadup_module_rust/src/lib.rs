@@ -33,15 +33,18 @@ fn main() -> Result<(), Error> {
     serde_json::to_writer(output, &data)?;
 
     let schema = WadupSchema::new("schema1");
-    let column1 = schema.column("column1");
-    let column2 = schema.column("column2");
+    let column1 = schema.column_str("column1");
+    let column2 = schema.column_i64("column2");
+    let column3 = schema.column_f64("column3");
 
-    column1.value_str("hello");
-    column2.value_i64(199);
+    column1.value("hello");
+    column2.value(199);
+    column3.value(76.3);
     schema.flush_row();
 
-    column1.value_str("bye");
-    column2.value_i64(777);
+    column1.value("bye");
+    column2.value(777);
+    column3.value(88.8);
     schema.flush_row();
 
     Ok(())
