@@ -107,7 +107,8 @@ fn wadup_error(mut caller: Caller<'_, Context>, error: u32, error_length: u32) -
     let memory = memory.data(&caller);
 
     let error = wadup_string_from_buffer(memory, error, error_length).map_err(|e| e.context("wadup_error"))?;
-    Err(anyhow!("Module Error: {}", error))
+    println!("Module Error: {}", error);
+    Err(anyhow!("Module Error: {}", error)) // TODO: The Err() is not making it to the error handler below
 }
 
 fn wadup_metadata_schema(mut caller: Caller<'_, Context>, schema_name: u32, schema_length: u32) -> Result<u32> {
@@ -206,7 +207,9 @@ fn main() -> Result<()> {
     
     let func = instance.get_typed_func::<(), ()>(&mut store, "wadup_run")?;
 
-    func.call(&mut store, ())?;
+    if let Err(err) = func.call(&mut store, ()) {
+        println!("Error handler: ...\n {}", err.to_string());
+    }
 
     {
         let output = store.data().output.lock().unwrap();

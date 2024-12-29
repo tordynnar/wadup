@@ -47,5 +47,6 @@ fn main() -> Result<(), Error> {
     column3.value(88.8);
     schema.flush_row();
 
-    Ok(())
+    //Ok(())
+    Err(anyhow::anyhow!("an error!!!"))
 }
