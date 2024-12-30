@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use wasmtime::{Caller, Config, Engine, Linker, Module, Store, ResourceLimiter, Trap};
-use anyhow::{Result, Error, anyhow};
+use anyhow::{Result, anyhow};
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use bimap::BiMap;
@@ -36,7 +36,7 @@ pub struct Context {
 impl ResourceLimiter for Context {
     fn memory_growing(&mut self, _: usize, desired: usize, _: Option<usize>) -> Result<bool> {
         if desired > self.memory_limit {
-            Err(anyhow!(LimitTrap::Memory))
+            Err(anyhow!("memory limit exceeded"))
         } else {
             self.memory_used = desired;
             Ok(true)
@@ -45,7 +45,7 @@ impl ResourceLimiter for Context {
 
     fn table_growing(&mut self, _: usize, desired: usize, _: Option<usize>) -> Result<bool> {
         if desired > self.table_limit {
-            Err(anyhow!(LimitTrap::Table))
+            Err(anyhow!("table limit exceeded"))
         } else {
             self.table_used = desired;
             Ok(true)
@@ -141,8 +141,7 @@ fn wadup_error(mut caller: Caller<'_, Context>, error: u32, error_length: u32) -
     let memory = memory.data(&caller);
 
     let error = wadup_string_from_buffer(memory, error, error_length).map_err(|e| e.context("wadup_error"))?;
-    println!("Module Error: {}", error);
-    Err(anyhow!("Module Error: {}", error)) // TODO: The Err() is not making it to the error handler below
+    Err(anyhow!("wasm module: {}", error))
 }
 
 fn wadup_metadata_schema(mut caller: Caller<'_, Context>, schema_name: u32, schema_length: u32) -> Result<u32> {
@@ -287,42 +286,6 @@ fn load_module(engine: &Engine, module_path: &str) -> Result<Module> {
     })
 }
 
-#[derive(Debug)]
-enum LimitTrap {
-    Memory,
-    Table,
-    Fuel,
-    Other,
-}
-
-impl From<Error> for LimitTrap {
-    fn from(e: Error) -> Self {
-        if let Some(trap) = e.downcast_ref::<Trap>() {
-            if *trap == Trap::OutOfFuel {
-                return LimitTrap::Fuel;
-            }
-        }
-        if let Ok(limit_trap) = e.downcast::<LimitTrap>() {
-            return limit_trap;
-        }
-        LimitTrap::Other
-    }
-}
-
-impl std::fmt::Display for LimitTrap {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let desc = match self {
-            LimitTrap::Memory => "memory limit exceeded",
-            LimitTrap::Table => "table limit exceeded",
-            LimitTrap::Fuel => "fuel limit exceeded",
-            LimitTrap::Other => "other problem"
-        };
-        write!(f, "trap: {desc}")
-    }
-}
-
-impl std::error::Error for LimitTrap {}
-
 const FUEL_FACTOR : u64 = 1;
 const MEMORY_FACTOR : u32 = 1024 * 1024;
 
@@ -355,9 +318,16 @@ fn main() -> Result<()> {
     
     let func = instance.get_typed_func::<(), ()>(&mut store, "wadup_run")?;
 
-    let limit_trap = func.call(&mut store, ()).err().map(LimitTrap::from);
-
-    println!("Limit trap: {:?}", limit_trap);
+    if let Some(e) = func.call(&mut store, ()).err() {
+        let e = if let Some(e) = e.downcast_ref::<Trap>() {
+            e.to_string()
+        } else if let Some(e) = e.downcast_ref::<String>() {
+            e.to_string()
+        } else {
+            e.to_string()
+        };
+        println!("ERROR: {}", e);
+    }
 
     {
         let output = store.data().output.lock().unwrap();
