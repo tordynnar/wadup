@@ -423,11 +423,6 @@ fn main() -> Result<()> {
 
     let pool = ThreadPool::new(20);
 
-    // These will all have the lifetime of the application, so give them static lifetimes
-    //let engine : &'static Engine = Box::leak(Box::new(engine));
-    //let linker : &'static Linker<Context> = Box::leak(Box::new(linker));
-    //let modules : &'static Vec<Module> = Box::leak(Box::new(modules));
-
     let engine = Arc::new(engine);
     let linker = Arc::new(linker);
 
