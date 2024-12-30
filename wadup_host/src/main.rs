@@ -12,6 +12,8 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::fs::{self, File};
 use clap::Parser;
+use threadpool::ThreadPool;
+use memmap2::Mmap;
 
 #[derive(Debug)]
 pub enum DataValue {
@@ -45,6 +47,8 @@ impl AsRef<[u8]> for Carve {
         data.get(self.offset..(self.offset+self.length)).unwrap_or(EMPTY_CARVE)
     }
 }
+
+// TODO: Do all of these need to be Arc<Mutex<<>> ??
 
 pub struct Context {
     pub input: Arc<dyn AsRef<[u8]>>,
@@ -261,13 +265,13 @@ pub fn file_modified(path: &PathBuf) -> Result<u64> {
     Ok(fs::metadata(path)?.modified()?.duration_since(UNIX_EPOCH)?.as_secs())
 }
 
-pub fn read_u64<R: Read>(input: &mut R) -> Result<u64> {
+pub fn read_u64_le<R: Read>(input: &mut R) -> Result<u64> {
     let mut buf = [0u8; 8];
     input.read(&mut buf)?;
     Ok(u64::from_le_bytes(buf))
 }
 
-pub fn write_u64<W: Write>(output: &mut W, value: u64) -> Result<()> {
+pub fn write_u64_le<W: Write>(output: &mut W, value: u64) -> Result<()> {
     output.write_all(value.to_le_bytes().as_ref())?;
     Ok(())
 }
@@ -279,11 +283,11 @@ fn read_compiled(module_compiled_path: &Path, engine_hash: u64, module_modified:
 
     let mut file = File::open(module_compiled_path)?;
 
-    if read_u64(&mut file)? != engine_hash {
+    if read_u64_le(&mut file)? != engine_hash {
         return Err(anyhow!("Engine hash doesn't match"))
     };
 
-    if read_u64(&mut file)? != module_modified {
+    if read_u64_le(&mut file)? != module_modified {
         return Err(anyhow!("Module modified doesn't match"))
     };
 
@@ -308,8 +312,8 @@ fn load_module(engine: &Engine, module_path: &PathBuf) -> Result<Module> {
     } else {
         let module = Module::from_file(&engine, module_path)?;
         let mut file = File::create(module_compiled_path)?;
-        write_u64(&mut file, engine_hash)?;
-        write_u64(&mut file, module_modified)?;
+        write_u64_le(&mut file, engine_hash)?;
+        write_u64_le(&mut file, module_modified)?;
         let module_serialized = module.serialize()?;
         file.write_all(module_serialized.as_slice())?;
         module
@@ -326,34 +330,9 @@ struct Cli {
     input: PathBuf,
 }
 
-fn main() -> Result<()> {
-    let args = Cli::parse();
-
-    let mut config = Config::new();
-    config.consume_fuel(true);
-
-    let engine = Engine::new(&config)?;
-
-    let mut linker: Linker<Context> = Linker::new(&engine);
-    add_to_linker(&mut linker)?;
-
-    let module_paths = fs::read_dir(args.modules)?
-        .filter_map(|p| p.ok() )
-        .map(|p| p.path())
-        .filter(|p| p.extension().map(|s| s == "wasm").unwrap_or(false))
-        .collect::<Vec<_>>();
-
-    let modules = module_paths.iter()
-        .map(|p| load_module(&engine, p))
-        .collect::<Result<Vec<_>,_>>()?;
-
-    let module = &modules[0];
-
-    //let module_path = "../wadup_module_rust/target/wasm32-unknown-unknown/release/wadup_module_rust.wasm";
-    //let module = load_module(&engine, module_path)?;
-
+fn process(engine: Arc<Engine>, linker: Arc<Linker<Context>>, module: Arc<Module>, input: Arc<dyn AsRef<[u8]>>) -> Result<()> {
     let mut store = Store::new(&engine, Context {
-        input: Arc::new(vec![6; 100]),
+        input: input.clone(),
         output: Default::default(),
         carves: Default::default(),
         schema: Default::default(),
@@ -370,7 +349,7 @@ fn main() -> Result<()> {
     store.set_fuel(fuel_start)?;
     store.limiter(|s| s);
 
-    let instance = linker.instantiate(&mut store, module)?;
+    let instance = linker.instantiate(&mut store, &module)?;
     
     let func = instance.get_typed_func::<(), ()>(&mut store, "wadup_run")?;
 
@@ -406,6 +385,78 @@ fn main() -> Result<()> {
     let fuel_used = fuel_start - fuel_end;
 
     println!("memory used: {}, table used: {}, fuel used: {}", store.data().memory_used, store.data().table_used, fuel_used);
+
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    let args = Cli::parse();
+
+    let mut config = Config::new();
+    config.consume_fuel(true);
+
+    let engine = Engine::new(&config)?;
+
+    let mut linker: Linker<Context> = Linker::new(&engine);
+    add_to_linker(&mut linker)?;
+
+    let module_paths = fs::read_dir(args.modules)?
+        .filter_map(|p| p.ok() )
+        .map(|p| p.path())
+        .filter(|p| p.extension().map(|s| s == "wasm").unwrap_or(false))
+        .collect::<Vec<_>>();
+
+    let modules = module_paths.iter()
+        .map(|p| load_module(&engine, p))
+        .collect::<Result<Vec<_>,_>>()?;
+
+    let modules = modules.into_iter().map(|m| Arc::new(m)).collect::<Vec<_>>();
+
+    let input_paths = fs::read_dir(args.input)?
+        .filter_map(|p| p.ok() )
+        .map(|p| p.path());
+
+    let pool = ThreadPool::new(20);
+
+    // These will all have the lifetime of the application, so give them static lifetimes
+    //let engine : &'static Engine = Box::leak(Box::new(engine));
+    //let linker : &'static Linker<Context> = Box::leak(Box::new(linker));
+    //let modules : &'static Vec<Module> = Box::leak(Box::new(modules));
+
+    let engine = Arc::new(engine);
+    let linker = Arc::new(linker);
+
+    for input_path in input_paths {
+        let input_file = File::open(input_path)?;
+        let mut input_queue : Vec<Arc<dyn AsRef<[u8]> + Sync + Send>> = Default::default();
+        input_queue.push(Arc::new(unsafe { Mmap::map(&input_file)? }));
+
+        loop {
+            if let Some(input) = input_queue.pop() {
+                
+                for module in &modules {
+                    let engine2 = engine.clone();
+                    let linker2 = linker.clone();
+                    let module2 = module.clone();
+                    let input2 = input.clone();
+                    pool.execute(move || {
+                        process(engine2, linker2, module2, input2).unwrap(); // TODO: Don't unwrap
+                    });
+                }
+
+
+            } else {
+                break;
+            }
+        }
+        
+        
+
+        pool.join();
+
+
+        // 1 thread per module
+    }
 
     Ok(())
 }

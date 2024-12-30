@@ -96,6 +96,11 @@ impl WadupInput {
     pub fn carve(&self, offset: u64, length: u64) {
         unsafe { wadup_input_carve(offset, length) }
     }
+
+    pub fn carve_from(&mut self, length: u64) {
+        unsafe { wadup_input_carve(self.pos, length) }
+        self.pos += length;
+    }
 }
 
 impl Read for WadupInput {
