@@ -20,9 +20,8 @@ pub enum DataValue {
     NoneValue,
 }
 
-#[derive(Default)]
 pub struct Context {
-    pub input: Arc<Vec<u8>>,
+    pub input: Arc<dyn AsRef<[u8]>>,
     pub output: Arc<Mutex<Vec<Vec<u8>>>>,
     pub schema: Arc<Mutex<BiMap<String,u32>>>,
     pub column: Arc<Mutex<HashMap<u32,HashMap<String,u32>>>>,
@@ -53,7 +52,7 @@ impl ResourceLimiter for Context {
     }
 }
 
-fn wadup_read(data: &Vec<u8>, mut caller: Caller<'_, Context>, buffer: u32, length: u32, offset: u64) -> Result<u32> {
+fn wadup_read(data: &[u8], mut caller: Caller<'_, Context>, buffer: u32, length: u32, offset: u64) -> Result<u32> {
     let memory = caller.get_export("memory").and_then(|v| v.into_memory()).ok_or(anyhow!("wadup_read memory not exported"))?;
     let start = usize::try_from(offset).map_err(|_| anyhow!("wadup_read offset u64 to usize conversion failed"))?;
     let length = usize::try_from(length).map_err(|_| anyhow!("wadup_read length u64 to usize conversion failed"))?;
@@ -67,11 +66,11 @@ fn wadup_read(data: &Vec<u8>, mut caller: Caller<'_, Context>, buffer: u32, leng
 
 fn wadup_input_read(caller: Caller<'_, Context>, buffer: u32, length: u32, offset: u64) -> Result<u32> {
     let input = caller.data().input.clone();
-    wadup_read(&input, caller, buffer, length, offset).map_err(|e| e.context("wadup_input_read"))
+    wadup_read(input.as_ref().as_ref(), caller, buffer, length, offset).map_err(|e| e.context("wadup_input_read"))
 }
 
 fn wadup_input_len(caller: Caller<'_, Context>) -> u64 {
-    caller.data().input.len() as u64
+    caller.data().input.as_ref().as_ref().len() as u64
 }
 
 fn wadup_input_carve(_caller: Caller<'_, Context>, _length: u64, _offset: u64) -> Result<()> {
@@ -303,9 +302,14 @@ fn main() -> Result<()> {
 
     let mut store = Store::new(&engine, Context {
         input: Arc::new(vec![6; 100]),
+        output: Default::default(),
+        schema: Default::default(),
+        column: Default::default(),
+        metadata: Default::default(),
         memory_limit: 10_000_000,
+        memory_used: Default::default(),
         table_limit: 1_000,
-        ..Default::default()
+        table_used: Default::default(),
     });
 
     let fuel = 100_000;
