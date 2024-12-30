@@ -9,8 +9,9 @@ use bimap::BiMap;
 use std::time::UNIX_EPOCH;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::fs::{self, File};
+use clap::Parser;
 
 #[derive(Debug)]
 pub enum DataValue {
@@ -256,7 +257,7 @@ fn add_to_linker(linker : &mut Linker<Context>) -> Result<()> {
     Ok(())
 }
 
-pub fn file_modified(path: &str) -> Result<u64> {
+pub fn file_modified(path: &PathBuf) -> Result<u64> {
     Ok(fs::metadata(path)?.modified()?.duration_since(UNIX_EPOCH)?.as_secs())
 }
 
@@ -292,14 +293,14 @@ fn read_compiled(module_compiled_path: &Path, engine_hash: u64, module_modified:
     Ok(result)
 }
 
-fn load_module(engine: &Engine, module_path: &str) -> Result<Module> {
+fn load_module(engine: &Engine, module_path: &PathBuf) -> Result<Module> {
     let mut hasher = DefaultHasher::new();
     engine.precompile_compatibility_hash().hash(&mut hasher);
     let engine_hash = hasher.finish();
 
     let module_modified = file_modified(module_path)?;
     
-    let module_compiled_path = format!("{}_precompiled", module_path);
+    let module_compiled_path = format!("{}_precompiled", module_path.display());
     let module_compiled_path = Path::new(&module_compiled_path);
 
     Ok(if let Some(module_compiled) = read_compiled(module_compiled_path, engine_hash, module_modified).ok() {
@@ -315,10 +316,19 @@ fn load_module(engine: &Engine, module_path: &str) -> Result<Module> {
     })
 }
 
-const FUEL_FACTOR : u64 = 1;
-const MEMORY_FACTOR : u32 = 1024 * 1024;
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[arg(long)]
+    modules: PathBuf,
+
+    #[arg(long)]
+    input: PathBuf,
+}
 
 fn main() -> Result<()> {
+    let args = Cli::parse();
+
     let mut config = Config::new();
     config.consume_fuel(true);
 
@@ -327,8 +337,20 @@ fn main() -> Result<()> {
     let mut linker: Linker<Context> = Linker::new(&engine);
     add_to_linker(&mut linker)?;
 
-    let module_path = "../wadup_module_rust/target/wasm32-unknown-unknown/release/wadup_module_rust.wasm";
-    let module = load_module(&engine, module_path)?;
+    let module_paths = fs::read_dir(args.modules)?
+        .filter_map(|p| p.ok() )
+        .map(|p| p.path())
+        .filter(|p| p.extension().map(|s| s == "wasm").unwrap_or(false))
+        .collect::<Vec<_>>();
+
+    let modules = module_paths.iter()
+        .map(|p| load_module(&engine, p))
+        .collect::<Result<Vec<_>,_>>()?;
+
+    let module = &modules[0];
+
+    //let module_path = "../wadup_module_rust/target/wasm32-unknown-unknown/release/wadup_module_rust.wasm";
+    //let module = load_module(&engine, module_path)?;
 
     let mut store = Store::new(&engine, Context {
         input: Arc::new(vec![6; 100]),
@@ -343,13 +365,12 @@ fn main() -> Result<()> {
         table_used: Default::default(),
     });
 
-    let fuel = 100_000;
-    let fuel_start = fuel * FUEL_FACTOR;
+    let fuel_start = 100_000;
 
     store.set_fuel(fuel_start)?;
     store.limiter(|s| s);
 
-    let instance = linker.instantiate(&mut store, &module)?;
+    let instance = linker.instantiate(&mut store, module)?;
     
     let func = instance.get_typed_func::<(), ()>(&mut store, "wadup_run")?;
 
@@ -382,7 +403,7 @@ fn main() -> Result<()> {
     }
 
     let fuel_end = store.get_fuel()?;
-    let fuel_used = (fuel_start - fuel_end) / FUEL_FACTOR;
+    let fuel_used = fuel_start - fuel_end;
 
     println!("memory used: {}, table used: {}, fuel used: {}", store.data().memory_used, store.data().table_used, fuel_used);
 

@@ -1,9 +1,0 @@
-#!/bin/bash
-
-cd wadup_module_rust
-cargo build --release
-cd ..
-cd wadup_host
-cargo build --release
-target/release/wadup_host
-cd ..

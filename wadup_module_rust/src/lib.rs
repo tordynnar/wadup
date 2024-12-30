@@ -29,8 +29,12 @@ fn main() -> Result<(), Error> {
         value3: result,
     };
 
-    let output = WadupOutput::new();
-    serde_json::to_writer(output, &data)?;
+    if buf.len() == 100 {
+        let output = WadupOutput::new();
+        serde_json::to_writer(output, &data)?;
+
+        input.carve(3, 2);
+    }
 
     let schema = WadupSchema::new("schema1");
     let column1 = schema.column_str("column1");
@@ -43,11 +47,9 @@ fn main() -> Result<(), Error> {
     schema.flush_row();
 
     column1.value("bye");
-    column2.value(777);
+    column2.value(buf.len() as i64);
     column3.value(88.8);
     schema.flush_row();
-
-    input.carve(3, 2);
 
     Ok(())
     //Err(anyhow::anyhow!("an error!!!"))

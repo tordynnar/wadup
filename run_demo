@@ -1,0 +1,19 @@
+#!/bin/bash
+
+cd wadup_module_rust
+cargo build --release
+cd ..
+cd wadup_host
+cargo build --release
+cd ..
+
+rm -rf demo
+mkdir -p demo/data
+mkdir -p demo/modules
+python create_data.py demo/data
+
+cp wadup_module_rust/target/wasm32-unknown-unknown/release/wadup_module_rust.wasm demo/modules/
+cp wadup_host/target/release/wadup_host demo/wadup
+
+cd demo
+./wadup --input data --modules modules
