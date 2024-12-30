@@ -39,7 +39,7 @@ fn main() -> Result<(), Error> {
 
     column1.value("hello");
     column2.value(199);
-    column3.value(76.3);
+    column3.value(76.6);
     schema.flush_row();
 
     column1.value("bye");
