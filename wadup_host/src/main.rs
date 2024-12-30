@@ -1,7 +1,7 @@
 #![feature(get_many_mut)]
 #![allow(dead_code)]
 
-use wasmtime::{Caller, Config, Engine, Linker, Module, Store};
+use wasmtime::{Caller, Config, Engine, Linker, Module, Store, ResourceLimiter};
 use anyhow::{Result, anyhow};
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
@@ -22,6 +22,24 @@ pub struct Context {
     pub schema: Arc<Mutex<BiMap<String,u32>>>,
     pub column: Arc<Mutex<HashMap<u32,HashMap<String,u32>>>>,
     pub metadata: Arc<Mutex<HashMap<(u32,u32),DataValue>>>,
+    pub memory_limit: usize,
+    pub memory_used: usize,
+    pub table_limit: usize,
+    pub table_used: usize,
+}
+
+impl ResourceLimiter for Context {
+    fn memory_growing(&mut self, _: usize, desired: usize, _: Option<usize>) -> Result<bool> {
+        let result = desired <= self.memory_limit;
+        if result { self.memory_used = desired }
+        Ok(result)
+    }
+
+    fn table_growing(&mut self, _: usize, desired: usize, _: Option<usize>) -> Result<bool> {
+        let result = desired <= self.table_limit;
+        if result { self.table_used = desired }
+        Ok(result)
+    }
 }
 
 fn wadup_read(data: &Vec<u8>, mut caller: Caller<'_, Context>, buffer: u32, length: u32, offset: u64) -> Result<u32> {
@@ -176,12 +194,7 @@ fn wadup_metadata_flush_row(caller: Caller<'_, Context>, schema_index: u32) -> R
     Ok(())
 }
 
-fn main() -> Result<()> {
-    let config = Config::new();
-
-    let engine = Engine::new(&config)?;
-
-    let mut linker: Linker<Context> = Linker::new(&engine);
+fn add_to_linker(linker : &mut Linker<Context>) -> Result<()> {
     linker.func_wrap("host", "wadup_input_read", wadup_input_read)?;
     linker.func_wrap("host", "wadup_input_len", wadup_input_len)?;
     linker.func_wrap("host", "wadup_output_create", wadup_output_create)?;
@@ -195,13 +208,27 @@ fn main() -> Result<()> {
     linker.func_wrap("host", "wadup_metadata_value_i64", wadup_metadata_value_i64)?;
     linker.func_wrap("host", "wadup_metadata_value_f64", wadup_metadata_value_f64)?;
     linker.func_wrap("host", "wadup_metadata_flush_row", wadup_metadata_flush_row)?;
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    let config = Config::new();
+
+    let engine = Engine::new(&config)?;
+
+    let mut linker: Linker<Context> = Linker::new(&engine);
+    add_to_linker(&mut linker)?;
 
     let module = Module::from_file(&engine, "../wadup_module_rust/target/wasm32-unknown-unknown/release/wadup_module_rust.wasm")?;
 
     let mut store = Store::new(&engine, Context {
         input: Arc::new(vec![6; 100]),
+        memory_limit: 10_000_000,
+        table_limit: 1_000,
         ..Default::default()
     });
+
+    store.limiter(|s| s);
 
     let instance = linker.instantiate(&mut store, &module)?;
     
@@ -218,6 +245,8 @@ fn main() -> Result<()> {
 
             println!("{}", d);
         }
+
+        println!("memory_used: {}, table_used: {}", store.data().memory_used, store.data().table_used);
     }
     Ok(())
 }
