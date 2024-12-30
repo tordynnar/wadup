@@ -78,7 +78,7 @@ impl ResourceLimiter for Context {
     }
 }
 
-fn wadup_read(data: &[u8], mut caller: Caller<'_, Context>, buffer: u32, length: u32, offset: u64) -> Result<u32> {
+fn wadup_read(data: &[u8], mut caller: Caller<'_, Context>, buffer: u32, offset: u64, length: u32) -> Result<u32> {
     let memory = caller.get_export("memory").and_then(|v| v.into_memory()).ok_or(anyhow!("wadup_read memory not exported"))?;
     let start = usize::try_from(offset).map_err(|_| anyhow!("wadup_read offset u64 to usize conversion failed"))?;
     let length = usize::try_from(length).map_err(|_| anyhow!("wadup_read length u64 to usize conversion failed"))?;
@@ -90,16 +90,16 @@ fn wadup_read(data: &[u8], mut caller: Caller<'_, Context>, buffer: u32, length:
     Ok(result)
 }
 
-fn wadup_input_read(caller: Caller<'_, Context>, buffer: u32, length: u32, offset: u64) -> Result<u32> {
+fn wadup_input_read(caller: Caller<'_, Context>, buffer: u32, offset: u64, length: u32) -> Result<u32> {
     let input = caller.data().input.clone();
-    wadup_read(input.as_ref().as_ref(), caller, buffer, length, offset).map_err(|e| e.context("wadup_input_read"))
+    wadup_read(input.as_ref().as_ref(), caller, buffer, offset, length).map_err(|e| e.context("wadup_input_read"))
 }
 
 fn wadup_input_len(caller: Caller<'_, Context>) -> u64 {
     caller.data().input.as_ref().as_ref().len() as u64
 }
 
-fn wadup_input_carve(caller: Caller<'_, Context>, length: u64, offset: u64) -> Result<()> {
+fn wadup_input_carve(caller: Caller<'_, Context>, offset: u64, length: u64) -> Result<()> {
     let offset = usize::try_from(offset).map_err(|_| anyhow!("wadup_input_carve offset u64 to usize conversion failed"))?;
     let length = usize::try_from(length).map_err(|_| anyhow!("wadup_input_carve length u64 to usize conversion failed"))?;
     let carve = Carve::new(caller.data().input.clone(), offset, length)?;
@@ -115,15 +115,15 @@ fn wadup_output_create(caller: Caller<'_, Context>) -> Result<i32> {
     Ok(result)
 }
 
-fn wadup_output_read(caller: Caller<'_, Context>, fd: i32, buffer: u32, length: u32, offset: u64) -> Result<u32> {
+fn wadup_output_read(caller: Caller<'_, Context>, fd: i32, buffer: u32, offset: u64, length: u32) -> Result<u32> {
     let fd = usize::try_from(fd).map_err(|_| anyhow!("wadup_output_read fd i32 to usize conversion failed"))?;
     let output = caller.data().output.clone();
     let output = output.lock().map_err(|_| anyhow!("wadup_output_read unable to lock mutex"))?;
     let output = output.get(fd).ok_or_else(|| anyhow!("wadup_output_read fd does not exist"))?;
-    wadup_read(&output, caller, buffer, length, offset).map_err(|e| e.context("wadup_output_read"))
+    wadup_read(&output, caller, buffer, offset, length).map_err(|e| e.context("wadup_output_read"))
 }
 
-fn wadup_output_write(mut caller: Caller<'_, Context>, fd: i32, buffer: u32, length: u32, offset: u64) -> Result<()> {
+fn wadup_output_write(mut caller: Caller<'_, Context>, fd: i32, buffer: u32, offset: u64, length: u32) -> Result<()> {
     let buffer = usize::try_from(buffer).map_err(|_| anyhow!("wadup_output_write buffer u32 to usize conversion failed"))?;
     let length = usize::try_from(length).map_err(|_| anyhow!("wadup_output_write length u32 to usize conversion failed"))?;
     let offset = usize::try_from(offset).map_err(|_| anyhow!("wadup_output_write offset u64 to usize conversion falied"))?;

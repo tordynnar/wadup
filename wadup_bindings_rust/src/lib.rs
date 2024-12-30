@@ -41,7 +41,7 @@ impl WadupOutput {
 impl Read for WadupOutput {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let buffer = buf.as_mut_ptr();
-        let len = unsafe { wadup_output_read(self.fd, buffer, buf.len(), self.pos) };
+        let len = unsafe { wadup_output_read(self.fd, buffer, self.pos, buf.len()) };
         self.pos += len as u64;
         Ok(len)
     }
@@ -50,7 +50,7 @@ impl Read for WadupOutput {
 impl Write for WadupOutput {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         unsafe {
-            wadup_output_write(self.fd, buf.as_ptr(), buf.len(), self.pos);
+            wadup_output_write(self.fd, buf.as_ptr(), self.pos, buf.len());
         }
         self.pos += buf.len() as u64;
         Ok(buf.len())
@@ -93,15 +93,15 @@ impl WadupInput {
         }
     }
 
-    pub fn carve(&self, length: u64, offset: u64) {
-        unsafe { wadup_input_carve(length, offset) }
+    pub fn carve(&self, offset: u64, length: u64) {
+        unsafe { wadup_input_carve(offset, length) }
     }
 }
 
 impl Read for WadupInput {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let buffer = buf.as_mut_ptr();
-        let len = unsafe { wadup_input_read(buffer, buf.len(), self.pos) };
+        let len = unsafe { wadup_input_read(buffer, self.pos, buf.len()) };
         self.pos += len as u64;
         Ok(len)
     }
@@ -216,13 +216,13 @@ const COLUMN_F64: u32 = 3;
 
 #[link(wasm_import_module = "host")]
 unsafe extern "C" {
-    fn wadup_input_read(buffer: *mut u8, length: usize, offset: u64) -> usize;
+    fn wadup_input_read(buffer: *mut u8, offset: u64, length: usize) -> usize;
     fn wadup_input_len() -> u64;
-    fn wadup_input_carve(length: u64, offset: u64);
+    fn wadup_input_carve(offset: u64, length: u64);
 
     fn wadup_output_create() -> i32;
-    fn wadup_output_read(fd: i32, buffer: *mut u8, length: usize, offset: u64) -> usize;
-    fn wadup_output_write(fd: i32, buffer: *const u8, length: usize, offset: u64);
+    fn wadup_output_read(fd: i32, buffer: *mut u8, offset: u64, length: usize) -> usize;
+    fn wadup_output_write(fd: i32, buffer: *const u8, offset: u64, length: usize);
     fn wadup_output_len(fd: i32) -> u64;
 
     pub fn wadup_error(error: *const u8, error_length: usize);
