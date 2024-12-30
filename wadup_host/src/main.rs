@@ -1,3 +1,10 @@
+/*
+TODO:
+  - Track lineage what metadata was derived from what file; what file was derived from what file; etc.
+  - Limit recursion
+  - Split this code into multiple file
+ */
+
 #![feature(get_many_mut)]
 #![allow(dead_code)]
 
@@ -297,7 +304,7 @@ fn read_compiled(module_compiled_path: &Path, engine_hash: u64, module_modified:
     Ok(result)
 }
 
-fn load_module(engine: &Engine, module_path: &PathBuf) -> Result<Module> {
+fn load_module(engine: &Engine, module_path: &PathBuf) -> Result<(String, Module)> {
     let mut hasher = DefaultHasher::new();
     engine.precompile_compatibility_hash().hash(&mut hasher);
     let engine_hash = hasher.finish();
@@ -307,7 +314,7 @@ fn load_module(engine: &Engine, module_path: &PathBuf) -> Result<Module> {
     let module_compiled_path = format!("{}_precompiled", module_path.display());
     let module_compiled_path = Path::new(&module_compiled_path);
 
-    Ok(if let Some(module_compiled) = read_compiled(module_compiled_path, engine_hash, module_modified).ok() {
+    let module = if let Some(module_compiled) = read_compiled(module_compiled_path, engine_hash, module_modified).ok() {
         unsafe { Module::deserialize(&engine, &module_compiled) }?
     } else {
         let module = Module::from_file(&engine, module_path)?;
@@ -317,7 +324,14 @@ fn load_module(engine: &Engine, module_path: &PathBuf) -> Result<Module> {
         let module_serialized = module.serialize()?;
         file.write_all(module_serialized.as_slice())?;
         module
-    })
+    };
+
+    let name = module_path
+        .file_name().ok_or_else(|| anyhow!("unable to get module file name"))?
+        .to_str().ok_or_else(|| anyhow!("unable to convert module file name to string"))?
+        .to_owned();
+
+    Ok((name, module))
 }
 
 #[derive(Parser, Debug)]
@@ -328,9 +342,25 @@ struct Cli {
 
     #[arg(long)]
     input: PathBuf,
+
+    #[arg(long)]
+    fuel: u64,
+
+    #[arg(long)]
+    memory: usize,
+
+    #[arg(long)]
+    table: usize,
 }
 
-fn process(engine: Arc<Engine>, linker: Arc<Linker<Context>>, module: Arc<Module>, input: Arc<dyn AsRef<[u8]> + Sync + Send>, new_input: Arc<Mutex<Vec<Arc<dyn AsRef<[u8]> + Sync + Send>>>>) -> Result<()> {
+struct ProcessConfig {
+    module_name: String,
+    fuel: u64,
+    memory: usize,
+    table: usize,
+}
+
+fn process(engine: Arc<Engine>, linker: Arc<Linker<Context>>, module: Arc<Module>, input: Arc<dyn AsRef<[u8]> + Sync + Send>, new_input: Arc<Mutex<Vec<Arc<dyn AsRef<[u8]> + Sync + Send>>>>, config: ProcessConfig) -> Result<()> {
     let mut store = Store::new(&engine, Context {
         input: input.clone(),
         output: Default::default(),
@@ -338,15 +368,13 @@ fn process(engine: Arc<Engine>, linker: Arc<Linker<Context>>, module: Arc<Module
         schema: Default::default(),
         column: Default::default(),
         metadata: Default::default(),
-        memory_limit: 10_000_000,
+        memory_limit: config.memory,
         memory_used: Default::default(),
-        table_limit: 1_000,
+        table_limit: config.table,
         table_used: Default::default(),
     });
 
-    let fuel_start = 100_000;
-
-    store.set_fuel(fuel_start)?;
+    store.set_fuel(config.fuel)?;
     store.limiter(|s| s);
 
     let instance = linker.instantiate(&mut store, &module)?;
@@ -387,9 +415,9 @@ fn process(engine: Arc<Engine>, linker: Arc<Linker<Context>>, module: Arc<Module
     }
 
     let fuel_end = store.get_fuel()?;
-    let fuel_used = fuel_start - fuel_end;
+    let fuel_used = config.fuel - fuel_end;
 
-    println!("memory used: {}, table used: {}, fuel used: {}", store.data().memory_used, store.data().table_used, fuel_used);
+    println!("{} memory used: {}, table used: {}, fuel used: {}", config.module_name, store.data().memory_used, store.data().table_used, fuel_used);
 
     Ok(())
 }
@@ -415,7 +443,7 @@ fn main() -> Result<()> {
         .map(|p| load_module(&engine, p))
         .collect::<Result<Vec<_>,_>>()?;
 
-    let modules = modules.into_iter().map(|m| Arc::new(m)).collect::<Vec<_>>();
+    let modules = modules.into_iter().map(|(n, m)| (n, Arc::new(m))).collect::<Vec<_>>();
 
     let input_paths = fs::read_dir(args.input)?
         .filter_map(|p| p.ok() )
@@ -436,14 +464,20 @@ fn main() -> Result<()> {
                 
                 let new_input : Arc<Mutex<Vec<Arc<dyn AsRef<[u8]> + Sync + Send>>>> = Default::default();
 
-                for module in &modules {
+                for (module_name, module) in &modules {
                     let engine = engine.clone();
                     let linker = linker.clone();
                     let module = module.clone();
                     let input = input.clone();
                     let new_input = new_input.clone();
+                    let process_config = ProcessConfig {
+                        module_name: module_name.clone(),
+                        fuel: args.fuel,
+                        memory: args.memory,
+                        table: args.table,
+                    };
                     pool.execute(move || {
-                        process(engine, linker, module, input, new_input).unwrap(); // TODO: Don't unwrap
+                        process(engine, linker, module, input, new_input, process_config).unwrap(); // TODO: Don't unwrap
                     });
                 }
 
