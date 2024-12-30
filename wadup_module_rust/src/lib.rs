@@ -47,6 +47,8 @@ fn main() -> Result<(), Error> {
     column3.value(88.8);
     schema.flush_row();
 
+    input.carve(3, 2);
+
     Ok(())
     //Err(anyhow::anyhow!("an error!!!"))
 }

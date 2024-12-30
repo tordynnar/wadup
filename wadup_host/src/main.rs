@@ -20,9 +20,35 @@ pub enum DataValue {
     NoneValue,
 }
 
+pub struct Carve {
+    pub data: Arc<dyn AsRef<[u8]>>,
+    pub offset: usize,
+    pub length: usize,
+}
+
+impl Carve {
+    pub fn new(data: Arc<dyn AsRef<[u8]>>, offset: usize, length: usize) -> Result<Carve> {
+        if offset + length > data.as_ref().as_ref().len() {
+            Err(anyhow!("carve out of bounds"))
+        } else {
+            Ok(Carve { data, offset, length })
+        }
+    }
+}
+
+const EMPTY_CARVE: &[u8] = &[];
+
+impl AsRef<[u8]> for Carve {
+    fn as_ref(&self) -> &[u8] {
+        let data = self.data.as_ref().as_ref();
+        data.get(self.offset..(self.offset+self.length)).unwrap_or(EMPTY_CARVE)
+    }
+}
+
 pub struct Context {
     pub input: Arc<dyn AsRef<[u8]>>,
     pub output: Arc<Mutex<Vec<Vec<u8>>>>,
+    pub carves: Arc<Mutex<Vec<Carve>>>,
     pub schema: Arc<Mutex<BiMap<String,u32>>>,
     pub column: Arc<Mutex<HashMap<u32,HashMap<String,u32>>>>,
     pub metadata: Arc<Mutex<HashMap<(u32,u32),DataValue>>>,
@@ -73,8 +99,12 @@ fn wadup_input_len(caller: Caller<'_, Context>) -> u64 {
     caller.data().input.as_ref().as_ref().len() as u64
 }
 
-fn wadup_input_carve(_caller: Caller<'_, Context>, _length: u64, _offset: u64) -> Result<()> {
-    // TODO
+fn wadup_input_carve(caller: Caller<'_, Context>, length: u64, offset: u64) -> Result<()> {
+    let offset = usize::try_from(offset).map_err(|_| anyhow!("wadup_input_carve offset u64 to usize conversion failed"))?;
+    let length = usize::try_from(length).map_err(|_| anyhow!("wadup_input_carve length u64 to usize conversion failed"))?;
+    let carve = Carve::new(caller.data().input.clone(), offset, length)?;
+    let mut carves = caller.data().carves.lock().map_err(|_| anyhow!("wadup_input_carve unable to lock mutex"))?;
+    carves.push(carve);
     Ok(())
 }
 
@@ -303,6 +333,7 @@ fn main() -> Result<()> {
     let mut store = Store::new(&engine, Context {
         input: Arc::new(vec![6; 100]),
         output: Default::default(),
+        carves: Default::default(),
         schema: Default::default(),
         column: Default::default(),
         metadata: Default::default(),
@@ -334,17 +365,26 @@ fn main() -> Result<()> {
     }
 
     {
+        let carves = store.data().carves.lock().unwrap();
+        for c in carves.iter() {
+            let cc = c.as_ref();
+            println!("{:?}", cc)
+        }
+    }
+
+    {
         let output = store.data().output.lock().unwrap();
         for o in output.iter() {
             let d = std::str::from_utf8(&o).unwrap();
 
             println!("{}", d);
         }
-
-        let fuel_end = store.get_fuel()?;
-        let fuel_used = (fuel_start - fuel_end) / FUEL_FACTOR;
-
-        println!("memory used: {}, table used: {}, fuel used: {}", store.data().memory_used, store.data().table_used, fuel_used);
     }
+
+    let fuel_end = store.get_fuel()?;
+    let fuel_used = (fuel_start - fuel_end) / FUEL_FACTOR;
+
+    println!("memory used: {}, table used: {}, fuel used: {}", store.data().memory_used, store.data().table_used, fuel_used);
+
     Ok(())
 }

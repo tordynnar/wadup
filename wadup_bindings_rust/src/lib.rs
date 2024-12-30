@@ -93,7 +93,7 @@ impl WadupInput {
         }
     }
 
-    pub fn carve(length: u64, offset: u64) {
+    pub fn carve(&self, length: u64, offset: u64) {
         unsafe { wadup_input_carve(length, offset) }
     }
 }
