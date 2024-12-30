@@ -1,8 +1,8 @@
 #![feature(get_many_mut)]
 #![allow(dead_code)]
 
-use wasmtime::{Caller, Config, Engine, Linker, Module, Store, ResourceLimiter};
-use anyhow::{Result, anyhow};
+use wasmtime::{Caller, Config, Engine, Linker, Module, Store, ResourceLimiter, Trap};
+use anyhow::{Result, Error, anyhow};
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use bimap::BiMap;
@@ -35,15 +35,21 @@ pub struct Context {
 
 impl ResourceLimiter for Context {
     fn memory_growing(&mut self, _: usize, desired: usize, _: Option<usize>) -> Result<bool> {
-        let result = desired <= self.memory_limit;
-        if result { self.memory_used = desired }
-        Ok(result)
+        if desired > self.memory_limit {
+            Err(anyhow!(LimitTrap::Memory))
+        } else {
+            self.memory_used = desired;
+            Ok(true)
+        }
     }
 
     fn table_growing(&mut self, _: usize, desired: usize, _: Option<usize>) -> Result<bool> {
-        let result = desired <= self.table_limit;
-        if result { self.table_used = desired }
-        Ok(result)
+        if desired > self.table_limit {
+            Err(anyhow!(LimitTrap::Table))
+        } else {
+            self.table_used = desired;
+            Ok(true)
+        }
     }
 }
 
@@ -275,8 +281,48 @@ fn load_module(engine: &Engine, module_path: &str) -> Result<Module> {
     })
 }
 
+#[derive(Debug)]
+enum LimitTrap {
+    Memory,
+    Table,
+    Fuel,
+    Other,
+}
+
+impl From<Error> for LimitTrap {
+    fn from(e: Error) -> Self {
+        if let Some(trap) = e.downcast_ref::<Trap>() {
+            if *trap == Trap::OutOfFuel {
+                return LimitTrap::Fuel;
+            }
+        }
+        if let Ok(limit_trap) = e.downcast::<LimitTrap>() {
+            return limit_trap;
+        }
+        LimitTrap::Other
+    }
+}
+
+impl std::fmt::Display for LimitTrap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let desc = match self {
+            LimitTrap::Memory => "memory limit exceeded",
+            LimitTrap::Table => "table limit exceeded",
+            LimitTrap::Fuel => "fuel limit exceeded",
+            LimitTrap::Other => "other problem"
+        };
+        write!(f, "trap: {desc}")
+    }
+}
+
+impl std::error::Error for LimitTrap {}
+
+const FUEL_FACTOR : u64 = 1;
+const MEMORY_FACTOR : u32 = 1024 * 1024;
+
 fn main() -> Result<()> {
-    let config = Config::new();
+    let mut config = Config::new();
+    config.consume_fuel(true);
 
     let engine = Engine::new(&config)?;
 
@@ -293,15 +339,19 @@ fn main() -> Result<()> {
         ..Default::default()
     });
 
+    let fuel = 100_000;
+    let fuel_start = fuel * FUEL_FACTOR;
+
+    store.set_fuel(fuel_start)?;
     store.limiter(|s| s);
 
     let instance = linker.instantiate(&mut store, &module)?;
     
     let func = instance.get_typed_func::<(), ()>(&mut store, "wadup_run")?;
 
-    if let Err(err) = func.call(&mut store, ()) {
-        println!("Error handler: ...\n {}", err.to_string());
-    }
+    let limit_trap = func.call(&mut store, ()).err().map(LimitTrap::from);
+
+    println!("Limit trap: {:?}", limit_trap);
 
     {
         let output = store.data().output.lock().unwrap();
@@ -311,7 +361,10 @@ fn main() -> Result<()> {
             println!("{}", d);
         }
 
-        println!("memory_used: {}, table_used: {}", store.data().memory_used, store.data().table_used);
+        let fuel_end = store.get_fuel()?;
+        let fuel_used = (fuel_start - fuel_end) / FUEL_FACTOR;
+
+        println!("memory used: {}, table used: {}, fuel used: {}", store.data().memory_used, store.data().table_used, fuel_used);
     }
     Ok(())
 }
