@@ -92,6 +92,10 @@ impl WadupInput {
             len: unsafe { wadup_input_len() },
         }
     }
+
+    pub fn carve(length: u64, offset: u64) {
+        unsafe { wadup_input_carve(length, offset) }
+    }
 }
 
 impl Read for WadupInput {
@@ -214,6 +218,7 @@ const COLUMN_F64: u32 = 3;
 unsafe extern "C" {
     fn wadup_input_read(buffer: *mut u8, length: usize, offset: u64) -> usize;
     fn wadup_input_len() -> u64;
+    fn wadup_input_carve(length: u64, offset: u64);
 
     fn wadup_output_create() -> i32;
     fn wadup_output_read(fd: i32, buffer: *mut u8, length: usize, offset: u64) -> usize;

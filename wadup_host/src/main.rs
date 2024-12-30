@@ -74,6 +74,11 @@ fn wadup_input_len(caller: Caller<'_, Context>) -> u64 {
     caller.data().input.len() as u64
 }
 
+fn wadup_input_carve(_caller: Caller<'_, Context>, _length: u64, _offset: u64) -> Result<()> {
+    // TODO
+    Ok(())
+}
+
 fn wadup_output_create(caller: Caller<'_, Context>) -> Result<i32> {
     let mut output = caller.data().output.lock().map_err(|_| anyhow!("wadup_output_create unable to lock mutex"))?;
     output.push(Vec::new());
@@ -208,6 +213,7 @@ fn wadup_metadata_flush_row(caller: Caller<'_, Context>, schema_index: u32) -> R
 fn add_to_linker(linker : &mut Linker<Context>) -> Result<()> {
     linker.func_wrap("host", "wadup_input_read", wadup_input_read)?;
     linker.func_wrap("host", "wadup_input_len", wadup_input_len)?;
+    linker.func_wrap("host", "wadup_input_carve", wadup_input_carve)?;
     linker.func_wrap("host", "wadup_output_create", wadup_output_create)?;
     linker.func_wrap("host", "wadup_output_read", wadup_output_read)?;
     linker.func_wrap("host", "wadup_output_write", wadup_output_write)?;
