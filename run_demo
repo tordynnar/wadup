@@ -13,7 +13,7 @@ mkdir -p demo/modules
 python create_data.py demo/data
 
 cp wadup_module_rust/target/wasm32-unknown-unknown/release/wadup_module_rust.wasm demo/modules/module1.wasm
-cp wadup_module_rust/target/wasm32-unknown-unknown/release/wadup_module_rust.wasm demo/modules/module2.wasm
+#cp wadup_module_rust/target/wasm32-unknown-unknown/release/wadup_module_rust.wasm demo/modules/module2.wasm
 cp wadup_host/target/release/wadup_host demo/wadup
 
 cd demo

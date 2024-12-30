@@ -24,13 +24,13 @@ pub enum DataValue {
 }
 
 pub struct Carve {
-    pub data: Arc<dyn AsRef<[u8]>>,
+    pub data: Arc<dyn AsRef<[u8]> + Sync + Send>,
     pub offset: usize,
     pub length: usize,
 }
 
 impl Carve {
-    pub fn new(data: Arc<dyn AsRef<[u8]>>, offset: usize, length: usize) -> Result<Carve> {
+    pub fn new(data: Arc<dyn AsRef<[u8]> + Sync + Send>, offset: usize, length: usize) -> Result<Carve> {
         if offset + length > data.as_ref().as_ref().len() {
             Err(anyhow!("carve out of bounds"))
         } else {
@@ -51,7 +51,7 @@ impl AsRef<[u8]> for Carve {
 // TODO: Do all of these need to be Arc<Mutex<<>> ??
 
 pub struct Context {
-    pub input: Arc<dyn AsRef<[u8]>>,
+    pub input: Arc<dyn AsRef<[u8]> + Sync + Send>,
     pub output: Arc<Mutex<Vec<Vec<u8>>>>,
     pub carves: Arc<Mutex<Vec<Carve>>>,
     pub schema: Arc<Mutex<BiMap<String,u32>>>,
@@ -330,7 +330,7 @@ struct Cli {
     input: PathBuf,
 }
 
-fn process(engine: Arc<Engine>, linker: Arc<Linker<Context>>, module: Arc<Module>, input: Arc<dyn AsRef<[u8]>>) -> Result<()> {
+fn process(engine: Arc<Engine>, linker: Arc<Linker<Context>>, module: Arc<Module>, input: Arc<dyn AsRef<[u8]> + Sync + Send>, new_input: Arc<Mutex<Vec<Arc<dyn AsRef<[u8]> + Sync + Send>>>>) -> Result<()> {
     let mut store = Store::new(&engine, Context {
         input: input.clone(),
         output: Default::default(),
@@ -365,19 +365,24 @@ fn process(engine: Arc<Engine>, linker: Arc<Linker<Context>>, module: Arc<Module
     }
 
     {
-        let carves = store.data().carves.lock().unwrap();
-        for c in carves.iter() {
-            let cc = c.as_ref();
-            println!("{:?}", cc)
+        let mut new_input = new_input.lock().map_err(|_| anyhow!("Unable to get new_input lock"))?;
+
+        let mut carves = store.data().carves.lock().map_err(|_| anyhow!("Unable to get carves lock"))?;
+        loop {
+            if let Some(i) = carves.pop() {
+                new_input.push(Arc::new(i));
+            } else {
+                break;
+            }
         }
-    }
 
-    {
-        let output = store.data().output.lock().unwrap();
-        for o in output.iter() {
-            let d = std::str::from_utf8(&o).unwrap();
-
-            println!("{}", d);
+        let mut output = store.data().output.lock().map_err(|_| anyhow!("Unable to get output lock"))?;
+        loop {
+            if let Some(i) = output.pop() {
+                new_input.push(Arc::new(i));
+            } else {
+                break;
+            }
         }
     }
 
@@ -434,28 +439,28 @@ fn main() -> Result<()> {
         loop {
             if let Some(input) = input_queue.pop() {
                 
+                let new_input : Arc<Mutex<Vec<Arc<dyn AsRef<[u8]> + Sync + Send>>>> = Default::default();
+
                 for module in &modules {
-                    let engine2 = engine.clone();
-                    let linker2 = linker.clone();
-                    let module2 = module.clone();
-                    let input2 = input.clone();
+                    let engine = engine.clone();
+                    let linker = linker.clone();
+                    let module = module.clone();
+                    let input = input.clone();
+                    let new_input = new_input.clone();
                     pool.execute(move || {
-                        process(engine2, linker2, module2, input2).unwrap(); // TODO: Don't unwrap
+                        process(engine, linker, module, input, new_input).unwrap(); // TODO: Don't unwrap
                     });
                 }
 
+                pool.join();
+
+                let mut new_input = new_input.lock().unwrap();  // TODO: Don't unwrap
+                input_queue.append(&mut new_input);
 
             } else {
                 break;
             }
         }
-        
-        
-
-        pool.join();
-
-
-        // 1 thread per module
     }
 
     Ok(())
