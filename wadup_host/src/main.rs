@@ -492,6 +492,7 @@ fn main() -> Result<()> {
 
         for input_path in input_paths {
             let input_file = File::open(&input_path).unwrap(); // TODO: remove unwrap
+            // TODO: Check size and only start the queue if we won't exceed maximum mmap'd files
             let input_blob : Blob = Arc::new(unsafe { Mmap::map(&input_file).unwrap() }); // TODO: remove unwrap
             for (module_name, module) in &*modules {
                 sender.send(JobOrDie::Job(Job {
