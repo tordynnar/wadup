@@ -9,5 +9,4 @@ bimap = "0.6.3"
 clap = { version = "4.5.23", features = ["derive"] }
 crossbeam = "0.8.4"
 memmap2 = "0.9.5"
-threadpool = "1.8.1"
 wasmtime = "26.0.0"

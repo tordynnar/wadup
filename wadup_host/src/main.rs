@@ -19,8 +19,10 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::fs::{self, File};
 use clap::Parser;
-use threadpool::ThreadPool;
 use memmap2::Mmap;
+use std::thread;
+use std::sync::atomic::{AtomicU64, AtomicBool};
+use std::sync::atomic::Ordering::Relaxed;
 
 type Blob = Arc<dyn AsRef<[u8]> + Sync + Send>;
 
@@ -351,31 +353,24 @@ struct Cli {
     table: usize,
 }
 
-struct ProcessConfig {
-    module_name: String,
-    fuel: u64,
-    memory: usize,
-    table: usize,
-}
-
-fn process(engine: Arc<Engine>, linker: Arc<Linker<Context>>, module: Arc<Module>, input: Blob, new_input: Arc<Mutex<Vec<Blob>>>, config: ProcessConfig) -> Result<()> {
-    let mut store = Store::new(&engine, Context {
-        input: input.clone(),
+fn process(job: Job) -> Result<()> { // new_input: Arc<Mutex<Vec<Blob>>>
+    let mut store = Store::new(&job.engine, Context {
+        input: job.blob,
         output: Default::default(),
         carves: Default::default(),
         schema: Default::default(),
         column: Default::default(),
         metadata: Default::default(),
-        memory_limit: config.memory,
+        memory_limit: job.memory,
         memory_used: Default::default(),
-        table_limit: config.table,
+        table_limit: job.table,
         table_used: Default::default(),
     });
 
-    store.set_fuel(config.fuel)?;
+    store.set_fuel(job.fuel)?;
     store.limiter(|s| s);
 
-    let instance = linker.instantiate(&mut store, &module)?;
+    let instance = job.linker.instantiate(&mut store, &job.module)?;
     
     let func = instance.get_typed_func::<(), ()>(&mut store, "wadup_run")?;
 
@@ -390,34 +385,29 @@ fn process(engine: Arc<Engine>, linker: Arc<Linker<Context>>, module: Arc<Module
         println!("ERROR: {}", e);
     }
 
-    {
-        let mut new_input = new_input.lock().map_err(|_| anyhow!("Unable to get new_input lock"))?;
-
-        let mut carves = store.data().carves.lock().map_err(|_| anyhow!("Unable to get carves lock"))?;
-        loop {
-            if let Some(i) = carves.pop() {
-                new_input.push(Arc::new(i));
-            } else {
-                break;
-            }
-        }
-
-        let mut output = store.data().output.lock().map_err(|_| anyhow!("Unable to get output lock"))?;
-        loop {
-            if let Some(i) = output.pop() {
-                new_input.push(Arc::new(i));
-            } else {
-                break;
-            }
-        }
-    }
-
     let fuel_end = store.get_fuel()?;
-    let fuel_used = config.fuel - fuel_end;
+    let fuel_used = job.fuel - fuel_end;
 
-    println!("{} memory used: {}, table used: {}, fuel used: {}", config.module_name, store.data().memory_used, store.data().table_used, fuel_used);
+    println!("{} {} memory used: {}, table used: {}, fuel used: {}", job.module_name, job.file_name, store.data().memory_used, store.data().table_used, fuel_used);
 
     Ok(())
+}
+
+struct Job {
+    engine: Arc<Engine>,
+    linker: Arc<Linker<Context>>,
+    module: Arc<Module>,
+    module_name: String,
+    file_name: String,
+    blob: Blob,
+    fuel: u64,
+    memory: usize,
+    table: usize,
+}
+
+enum JobOrDie {
+    Job(Job),
+    Die,
 }
 
 fn main() -> Result<()> {
@@ -447,52 +437,77 @@ fn main() -> Result<()> {
         .filter_map(|p| p.ok() )
         .map(|p| p.path());
 
-    let thread_count = 20usize;
-
-    let pool = ThreadPool::new(thread_count);
-
     let engine = Arc::new(engine);
     let linker = Arc::new(linker);
+    let modules = Arc::new(modules);
 
-    //let (s, r) = crossbeam::channel::unbounded::<Blob>();
+    let (sender, receiver) = crossbeam::channel::unbounded::<JobOrDie>();
+    let waiting = &AtomicU64::new(0);
+    let started = &AtomicBool::new(false);
+    let thread_count = 5usize; // TODO: test for <= 64 (allow an extra bit to allow calculation of the next value)
+    let all_waiting = if thread_count == 64 {
+        0xffffffffffffffff
+    } else {
+        (1u64 << thread_count) - 1
+    };
 
-    for input_path in input_paths {
-        let input_file = File::open(input_path)?;
-        let mut input_queue : Vec<Blob> = Default::default();
-        input_queue.push(Arc::new(unsafe { Mmap::map(&input_file)? }));
-
-        loop {
-            if let Some(input) = input_queue.pop() {
-                
-                let new_input : Arc<Mutex<Vec<Blob>>> = Default::default();
-
-                for (module_name, module) in &modules {
-                    let engine = engine.clone();
-                    let linker = linker.clone();
-                    let module = module.clone();
-                    let input = input.clone();
-                    let new_input = new_input.clone();
-                    let process_config = ProcessConfig {
-                        module_name: module_name.clone(),
-                        fuel: args.fuel,
-                        memory: args.memory,
-                        table: args.table,
-                    };
-                    pool.execute(move || {
-                        process(engine, linker, module, input, new_input, process_config).unwrap(); // TODO: Don't unwrap
-                    });
+    thread::scope(|s| {
+        for thread_index in 0..thread_count {
+            let thread_mask = 1u64 << thread_index;
+            let sender = sender.clone();
+            let receiver = receiver.clone();
+            s.spawn(move || {
+                loop {
+                    if receiver.is_empty() {
+                        println!("thread {}: no job in queue", thread_index);
+                        if waiting.fetch_or(thread_mask, Relaxed) | thread_mask == all_waiting {
+                            if started.load(Relaxed) {
+                                println!("thread {}: all receivers waiting, sending die!!", thread_index);
+                                for _ in 0..thread_count {
+                                    sender.send(JobOrDie::Die).unwrap(); // TODO: Remove unwrap
+                                }
+                                return;
+                            } else {
+                                println!("thread {}: all receivers waiting, but haven't received first job yet", thread_index)
+                            }
+                        }
+                    } else {
+                        println!("thread {}: job in queue", thread_index);
+                    }
+                    match receiver.recv() {
+                        Ok(JobOrDie::Job(job)) => {
+                            waiting.fetch_and(all_waiting - thread_mask, Relaxed);
+                            started.store(true, Relaxed);
+                            println!("thread {}: processing job {} {}", thread_index, job.module_name, job.file_name);
+                            process(job).unwrap(); // TODO: Remove unwrap
+                        },
+                        _ => {
+                            println!("thread: {} terminating", thread_index);
+                            return;
+                        }
+                    }
                 }
+            });
+        }
 
-                pool.join();
-
-                let mut new_input = new_input.lock().unwrap();  // TODO: Don't unwrap
-                input_queue.append(&mut new_input);
-
-            } else {
-                break;
+        for input_path in input_paths {
+            let input_file = File::open(&input_path).unwrap(); // TODO: remove unwrap
+            let input_blob : Blob = Arc::new(unsafe { Mmap::map(&input_file).unwrap() }); // TODO: remove unwrap
+            for (module_name, module) in &*modules {
+                sender.send(JobOrDie::Job(Job {
+                    engine: engine.clone(),
+                    linker: linker.clone(),
+                    module: module.clone(),
+                    module_name: module_name.clone(),
+                    file_name: input_path.as_os_str().to_str().unwrap().to_owned(), // TODO: remove unwrap
+                    blob: input_blob.clone(),
+                    fuel: args.fuel,
+                    memory: args.memory,
+                    table: args.table,
+                })).unwrap(); // TODO: remove unwrap
             }
         }
-    }
+    });
 
     Ok(())
 }
