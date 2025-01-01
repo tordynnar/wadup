@@ -1,5 +1,6 @@
 /*
 TODO:
+  - Not yet processing new data output from modules, only carved data
   - Track lineage what metadata was derived from what file; what file was derived from what file; etc.
   - Limit recursion
   - Split this code into multiple file
@@ -8,6 +9,7 @@ TODO:
 #![feature(get_many_mut)]
 #![allow(dead_code)]
 
+use crossbeam::channel::Sender;
 use wasmtime::{Caller, Config, Engine, Linker, Module, Store, ResourceLimiter, Trap};
 use anyhow::{Result, anyhow};
 use std::sync::{Arc, Mutex};
@@ -62,9 +64,9 @@ impl AsRef<[u8]> for Carve {
 // TODO: Do all of these need to be Arc<Mutex<<>> ??
 
 pub struct Context {
+    pub job: Job,
     pub input: Blob,
     pub output: Arc<Mutex<Vec<Vec<u8>>>>,
-    pub carves: Arc<Mutex<Vec<Carve>>>,
     pub schema: Arc<Mutex<BiMap<String,u32>>>,
     pub column: Arc<Mutex<HashMap<u32,HashMap<String,u32>>>>,
     pub metadata: Arc<Mutex<HashMap<(u32,u32),DataValue>>>,
@@ -118,9 +120,24 @@ fn wadup_input_len(caller: Caller<'_, Context>) -> u64 {
 fn wadup_input_carve(caller: Caller<'_, Context>, offset: u64, length: u64) -> Result<()> {
     let offset = usize::try_from(offset).map_err(|_| anyhow!("wadup_input_carve offset u64 to usize conversion failed"))?;
     let length = usize::try_from(length).map_err(|_| anyhow!("wadup_input_carve length u64 to usize conversion failed"))?;
-    let carve = Carve::new(caller.data().input.clone(), offset, length)?;
-    let mut carves = caller.data().carves.lock().map_err(|_| anyhow!("wadup_input_carve unable to lock mutex"))?;
-    carves.push(carve);
+    let carve = Arc::new(Carve::new(caller.data().input.clone(), offset, length)?);
+    for (module_name, module) in &*caller.data().job.modules {
+        caller.data().job.sender.send(JobOrDie::Job(Job {
+            sender: caller.data().job.sender.clone(),
+            engine: caller.data().job.engine.clone(),
+            linker: caller.data().job.linker.clone(),
+            modules: caller.data().job.modules.clone(),
+            module: module.clone(),
+            module_name: module_name.clone(),
+            file_name: "[derived]".to_owned(),
+            blob: carve.clone(),
+
+            // TODO: Send the args into the job
+            fuel: 10_000_000,
+            memory: 10_000_000,
+            table: 10_000,
+        }))?;
+    }
     Ok(())
 }
 
@@ -353,11 +370,11 @@ struct Cli {
     table: usize,
 }
 
-fn process(job: Job) -> Result<()> { // new_input: Arc<Mutex<Vec<Blob>>>
+fn process(job: Job) -> Result<()> {
     let mut store = Store::new(&job.engine, Context {
+        job: job.clone(),
         input: job.blob,
         output: Default::default(),
-        carves: Default::default(),
         schema: Default::default(),
         column: Default::default(),
         metadata: Default::default(),
@@ -393,9 +410,17 @@ fn process(job: Job) -> Result<()> { // new_input: Arc<Mutex<Vec<Blob>>>
     Ok(())
 }
 
-struct Job {
+enum JobOrDie {
+    Job(Job),
+    Die,
+}
+
+#[derive(Clone)]
+pub struct Job {
+    sender: Sender<JobOrDie>,
     engine: Arc<Engine>,
     linker: Arc<Linker<Context>>,
+    modules: Arc<Vec<(String, Arc<Module>)>>,
     module: Arc<Module>,
     module_name: String,
     file_name: String,
@@ -403,11 +428,6 @@ struct Job {
     fuel: u64,
     memory: usize,
     table: usize,
-}
-
-enum JobOrDie {
-    Job(Job),
-    Die,
 }
 
 fn main() -> Result<()> {
@@ -496,8 +516,12 @@ fn main() -> Result<()> {
             let input_blob : Blob = Arc::new(unsafe { Mmap::map(&input_file).unwrap() }); // TODO: remove unwrap
             for (module_name, module) in &*modules {
                 sender.send(JobOrDie::Job(Job {
+                    // These could be all in one Arc<> ... Arc<Environment>??
+                    sender: sender.clone(),
                     engine: engine.clone(),
                     linker: linker.clone(),
+                    modules: modules.clone(),
+
                     module: module.clone(),
                     module_name: module_name.clone(),
                     file_name: input_path.as_os_str().to_str().unwrap().to_owned(), // TODO: remove unwrap
