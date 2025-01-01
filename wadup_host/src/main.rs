@@ -268,10 +268,6 @@ fn add_to_linker(linker : &mut Linker<Context>) -> Result<()> {
     Ok(())
 }
 
-pub fn file_modified(path: &PathBuf) -> Result<u64> {
-    Ok(fs::metadata(path)?.modified()?.duration_since(UNIX_EPOCH)?.as_secs())
-}
-
 pub fn read_u64_le<R: Read>(input: &mut R) -> Result<u64> {
     let mut buf = [0u8; 8];
     input.read(&mut buf)?;
@@ -309,8 +305,8 @@ fn load_module(engine: &Engine, module_path: &PathBuf) -> Result<(String, Module
     engine.precompile_compatibility_hash().hash(&mut hasher);
     let engine_hash = hasher.finish();
 
-    let module_modified = file_modified(module_path)?;
-    
+    let module_modified = fs::metadata(module_path)?.modified()?.duration_since(UNIX_EPOCH)?.as_secs();
+
     let module_compiled_path = format!("{}_precompiled", module_path.display());
     let module_compiled_path = Path::new(&module_compiled_path);
 
@@ -453,6 +449,8 @@ fn main() -> Result<()> {
 
     let engine = Arc::new(engine);
     let linker = Arc::new(linker);
+
+    
 
     for input_path in input_paths {
         let input_file = File::open(input_path)?;
