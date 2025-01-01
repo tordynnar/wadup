@@ -22,6 +22,8 @@ use clap::Parser;
 use threadpool::ThreadPool;
 use memmap2::Mmap;
 
+type Blob = Arc<dyn AsRef<[u8]> + Sync + Send>;
+
 #[derive(Debug)]
 pub enum DataValue {
     StringValue(String),
@@ -31,13 +33,13 @@ pub enum DataValue {
 }
 
 pub struct Carve {
-    pub data: Arc<dyn AsRef<[u8]> + Sync + Send>,
+    pub data: Blob,
     pub offset: usize,
     pub length: usize,
 }
 
 impl Carve {
-    pub fn new(data: Arc<dyn AsRef<[u8]> + Sync + Send>, offset: usize, length: usize) -> Result<Carve> {
+    pub fn new(data: Blob, offset: usize, length: usize) -> Result<Carve> {
         if offset + length > data.as_ref().as_ref().len() {
             Err(anyhow!("carve out of bounds"))
         } else {
@@ -58,7 +60,7 @@ impl AsRef<[u8]> for Carve {
 // TODO: Do all of these need to be Arc<Mutex<<>> ??
 
 pub struct Context {
-    pub input: Arc<dyn AsRef<[u8]> + Sync + Send>,
+    pub input: Blob,
     pub output: Arc<Mutex<Vec<Vec<u8>>>>,
     pub carves: Arc<Mutex<Vec<Carve>>>,
     pub schema: Arc<Mutex<BiMap<String,u32>>>,
@@ -356,7 +358,7 @@ struct ProcessConfig {
     table: usize,
 }
 
-fn process(engine: Arc<Engine>, linker: Arc<Linker<Context>>, module: Arc<Module>, input: Arc<dyn AsRef<[u8]> + Sync + Send>, new_input: Arc<Mutex<Vec<Arc<dyn AsRef<[u8]> + Sync + Send>>>>, config: ProcessConfig) -> Result<()> {
+fn process(engine: Arc<Engine>, linker: Arc<Linker<Context>>, module: Arc<Module>, input: Blob, new_input: Arc<Mutex<Vec<Blob>>>, config: ProcessConfig) -> Result<()> {
     let mut store = Store::new(&engine, Context {
         input: input.clone(),
         output: Default::default(),
@@ -445,22 +447,24 @@ fn main() -> Result<()> {
         .filter_map(|p| p.ok() )
         .map(|p| p.path());
 
-    let pool = ThreadPool::new(20);
+    let thread_count = 20usize;
+
+    let pool = ThreadPool::new(thread_count);
 
     let engine = Arc::new(engine);
     let linker = Arc::new(linker);
 
-    
+    //let (s, r) = crossbeam::channel::unbounded::<Blob>();
 
     for input_path in input_paths {
         let input_file = File::open(input_path)?;
-        let mut input_queue : Vec<Arc<dyn AsRef<[u8]> + Sync + Send>> = Default::default();
+        let mut input_queue : Vec<Blob> = Default::default();
         input_queue.push(Arc::new(unsafe { Mmap::map(&input_file)? }));
 
         loop {
             if let Some(input) = input_queue.pop() {
                 
-                let new_input : Arc<Mutex<Vec<Arc<dyn AsRef<[u8]> + Sync + Send>>>> = Default::default();
+                let new_input : Arc<Mutex<Vec<Blob>>> = Default::default();
 
                 for (module_name, module) in &modules {
                     let engine = engine.clone();
