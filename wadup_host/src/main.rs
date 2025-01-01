@@ -462,7 +462,12 @@ fn main() -> Result<()> {
     let modules = Arc::new(modules);
 
     let (sender, receiver) = crossbeam::channel::unbounded::<JobOrDie>();
-    let waiting = &AtomicU64::new(0); // TODO: Tracking state like this is clever, but probably want a locking state object for display purposes
+
+    // TODO:
+    //  - Tracking state like this is clever, but probably want a locking state object for display purposes
+    //  - Alternatively, could use have a list of submitted jobs and channel to signal which jobs are complete (removing jobs as they complete)
+
+    let waiting = &AtomicU64::new(0);
     let started = &AtomicBool::new(false);
     let thread_count = 5usize; // TODO: test for <= 64 (allow an extra bit to allow calculation of the next value)
     let all_waiting = if thread_count == 64 {
