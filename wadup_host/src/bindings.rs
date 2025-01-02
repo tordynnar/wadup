@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{carve::Carve, DataValue};
+use crate::{carve::Carve, types::DataValue};
 use crate::context::Context;
 use wasmtime::{Caller, Linker};
 use anyhow::{Result, anyhow};

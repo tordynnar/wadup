@@ -29,16 +29,6 @@ use job::{process, Job, JobOrDie};
 use types::Blob;
 use mmap::Mmap;
 
-#[derive(Debug)]
-pub enum DataValue {
-    StringValue(String),
-    Int64Value(i64),
-    Float64Value(f64),
-    NoneValue,
-}
-
-
-
 fn main() -> Result<()> {
     let environment = Arc::new(Environment::create()?);
     

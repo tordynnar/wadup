@@ -5,8 +5,7 @@ use bimap::BiMap;
 use wasmtime::ResourceLimiter;
 use anyhow::{Result, anyhow};
 
-use crate::DataValue;
-use crate::types::Blob;
+use crate::types::{Blob, DataValue};
 use crate::job::Job;
 
 pub struct Context {
