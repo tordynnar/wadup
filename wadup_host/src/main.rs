@@ -177,8 +177,6 @@ fn main() -> Result<()> {
                         table: args.table,
                     }))?;
                 }
-
-                ()
             };
             if let Err(err) = result {
                 println!("Failed to create job from {}: {}", input_path.as_os_str().to_str().unwrap_or(""), err);
