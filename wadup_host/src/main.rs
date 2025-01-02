@@ -40,7 +40,7 @@ fn main() -> Result<()> {
     let (sender, receiver) = crossbeam::channel::unbounded::<JobOrDie>();
 
     let waiting = &AtomicU64::new(0);
-    let started = &AtomicBool::new(false);
+    let started = &AtomicBool::new(false); // TODO: Can started be a thread local, non-atomic value??
     let thread_count = environment.args.threads;
     if thread_count > 64 {
         return Err(anyhow!("Up to 64 threads are supported"));
@@ -116,6 +116,9 @@ fn main() -> Result<()> {
                 let input_file = File::open(&input_path)?;
                 
                 let input_len = input_file.metadata()?.len();
+                if input_len > environment.args.mapped {
+                    Err(anyhow!("File {} larger than maximum mapped memory", input_path.as_os_str().to_str().unwrap_or("")))?;
+                }
                 while mapped + input_len > environment.args.mapped {
                     mapped -= free_receiver.recv()?;
                 }
