@@ -9,27 +9,23 @@ TODO:
 #![feature(try_blocks)]
 
 use std::sync::Arc;
-use std::path::PathBuf;
 use std::fs::{self, File};
 use std::thread;
 use std::sync::atomic::{AtomicU64, AtomicBool};
 use std::sync::atomic::Ordering::Relaxed;
-use clap::Parser;
-use wasmtime::{Config, Engine, Linker};
 use anyhow::Result;
 
 mod bindings;
 mod carve;
 mod context;
+mod environment;
 mod job;
 mod load;
 mod types;
 mod mmap;
 
-use bindings::add_to_linker;
-use context::Context;
+use environment::Environment;
 use job::{process, Job, JobOrDie};
-use load::load_module;
 use types::Blob;
 use mmap::Mmap;
 
@@ -41,58 +37,14 @@ pub enum DataValue {
     NoneValue,
 }
 
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Cli {
-    #[arg(long)]
-    modules: PathBuf,
 
-    #[arg(long)]
-    input: PathBuf,
-
-    #[arg(long)]
-    fuel: u64,
-
-    #[arg(long)]
-    memory: usize,
-
-    #[arg(long)]
-    table: usize,
-
-    #[arg(long)]
-    mapped: u64,
-}
 
 fn main() -> Result<()> {
-    let args = Cli::parse();
-
-    let mut config = Config::new();
-    config.consume_fuel(true);
-
-    let engine = Engine::new(&config)?;
-
-    let mut linker: Linker<Context> = Linker::new(&engine);
-    add_to_linker(&mut linker)?;
-
-    let module_paths = fs::read_dir(args.modules)?
-        .filter_map(|p| p.ok() )
-        .map(|p| p.path())
-        .filter(|p| p.extension().map(|s| s == "wasm").unwrap_or(false))
-        .collect::<Vec<_>>();
-
-    let modules = module_paths.iter()
-        .map(|p| load_module(&engine, p))
-        .collect::<Result<Vec<_>,_>>()?;
-
-    let modules = modules.into_iter().map(|(n, m)| (n, Arc::new(m))).collect::<Vec<_>>();
-
-    let input_paths = fs::read_dir(args.input)?
+    let environment = Arc::new(Environment::create()?);
+    
+    let input_paths = fs::read_dir(&environment.args.input)?
         .filter_map(|p| p.ok() )
         .map(|p| p.path());
-
-    let engine = Arc::new(engine);
-    let linker = Arc::new(linker);
-    let modules = Arc::new(modules);
 
     let (sender, receiver) = crossbeam::channel::unbounded::<JobOrDie>();
 
@@ -154,26 +106,21 @@ fn main() -> Result<()> {
                 let input_file = File::open(&input_path)?;
                 
                 let input_len = input_file.metadata()?.len();
-                while mapped + input_len > args.mapped {
+                while mapped + input_len > environment.args.mapped {
                     mapped -= free_receiver.recv()?;
                 }
 
                 mapped += input_len;
                 let input_blob : Blob = Arc::new(Mmap::new(&input_file, input_len, free_sender.clone())?);
 
-                for (module_name, module) in &*modules {
+                for (module_name, module) in &*environment.modules {
                     sender.send(JobOrDie::Job(Job {
                         sender: sender.clone(),
-                        engine: engine.clone(),
-                        linker: linker.clone(),
-                        modules: modules.clone(),
+                        environment: environment.clone(),
                         module: module.clone(),
                         module_name: module_name.clone(),
                         file_name: input_path.as_os_str().to_str().unwrap_or("").to_owned(),
                         blob: input_blob.clone(),
-                        fuel: args.fuel,
-                        memory: args.memory,
-                        table: args.table,
                     }))?;
                 }
             };

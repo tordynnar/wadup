@@ -31,19 +31,14 @@ pub fn wadup_input_carve(caller: Caller<'_, Context>, offset: u64, length: u64) 
     let offset = usize::try_from(offset).map_err(|_| anyhow!("wadup_input_carve offset u64 to usize conversion failed"))?;
     let length = usize::try_from(length).map_err(|_| anyhow!("wadup_input_carve length u64 to usize conversion failed"))?;
     let carve = Arc::new(Carve::new(caller.data().input.clone(), offset, length)?);
-    for (module_name, module) in &*caller.data().job.modules {
+    for (module_name, module) in &*caller.data().job.environment.modules {
         caller.data().job.sender.send(JobOrDie::Job(Job {
             sender: caller.data().job.sender.clone(),
-            engine: caller.data().job.engine.clone(),
-            linker: caller.data().job.linker.clone(),
-            modules: caller.data().job.modules.clone(),
+            environment: caller.data().job.environment.clone(),
             module: module.clone(),
             module_name: module_name.clone(),
             file_name: "[derived]".to_owned(),
             blob: carve.clone(),
-            fuel: caller.data().job.fuel,
-            memory: caller.data().job.memory,
-            table: caller.data().job.table,
         }))?;
     }
     Ok(())
