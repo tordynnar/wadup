@@ -40,7 +40,7 @@ fn main() -> Result<()> {
     let (sender, receiver) = crossbeam::channel::unbounded::<JobOrDie>();
 
     let waiting = &AtomicU64::new(0);
-    let started = &AtomicBool::new(false); // TODO: Can started be a thread local, non-atomic value??
+    let started = &AtomicBool::new(false); // TODO: Can started be a thread local, non-atomic value?? Answer: No, if a thread starts, processes a job and finishes before any other thread starts, then it locks
     let thread_count = environment.args.threads;
     if thread_count > 64 {
         return Err(anyhow!("Up to 64 threads are supported"));
