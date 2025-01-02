@@ -24,6 +24,7 @@ mod load;
 mod types;
 mod mmap;
 
+use crossbeam::channel::TryRecvError;
 use environment::Environment;
 use job::{process, Job, JobOrDie};
 use types::Blob;
@@ -57,24 +58,40 @@ fn main() -> Result<()> {
             let receiver = receiver.clone();
             s.spawn(move || {
                 loop {
-                    if receiver.is_empty() {
-                        println!("thread {}: no job in queue", thread_index);
-                        if waiting.fetch_or(thread_mask, Relaxed) | thread_mask == all_waiting {
-                            if started.load(Relaxed) {
-                                println!("thread {}: all receivers waiting, sending die!!", thread_index);
-                                for _ in 0..thread_count {
-                                    let _ = sender.send(JobOrDie::Die);
+                    let job_or_die = match receiver.try_recv() {
+                        Ok(job_or_die) => {
+                            job_or_die
+                        },
+                        Err(TryRecvError::Disconnected) => {
+                            JobOrDie::Die
+                        }
+                        Err(TryRecvError::Empty) => {
+                            println!("thread {}: no job in queue", thread_index);
+                            if waiting.fetch_or(thread_mask, Relaxed) | thread_mask == all_waiting {
+                                if started.load(Relaxed) {
+                                    println!("thread {}: all receivers waiting, sending die!!", thread_index);
+                                    for _ in 0..thread_count {
+                                        let _ = sender.send(JobOrDie::Die);
+                                    }
+                                    return;
+                                } else {
+                                    println!("thread {}: all receivers waiting, but haven't received first job yet", thread_index)
                                 }
-                                return;
-                            } else {
-                                println!("thread {}: all receivers waiting, but haven't received first job yet", thread_index)
+                            }
+
+                            match receiver.recv() {
+                                Ok(job_or_die) => {
+                                    job_or_die
+                                },
+                                Err(_) => {
+                                    JobOrDie::Die
+                                }
                             }
                         }
-                    } else {
-                        println!("thread {}: job in queue", thread_index);
-                    }
-                    match receiver.recv() {
-                        Ok(JobOrDie::Job(job)) => {
+                    };
+
+                    match job_or_die {
+                        JobOrDie::Job(job) => {
                             waiting.fetch_and(all_waiting - thread_mask, Relaxed);
                             started.store(true, Relaxed);
                             println!("thread {}: processing job {} {}", thread_index, &job.module_name, &job.file_name);
