@@ -41,11 +41,9 @@ pub fn wadup_input_carve(caller: Caller<'_, Context>, offset: u64, length: u64) 
             module_name: module_name.clone(),
             file_name: "[derived]".to_owned(),
             blob: carve.clone(),
-
-            // TODO: Send the args into the job
-            fuel: 10_000_000,
-            memory: 10_000_000,
-            table: 10_000,
+            fuel: caller.data().job.fuel,
+            memory: caller.data().job.memory,
+            table: caller.data().job.table,
         }))?;
     }
     Ok(())
