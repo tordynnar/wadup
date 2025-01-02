@@ -1,5 +1,6 @@
 use std::fs::File;
 use crossbeam::channel::Sender;
+use anyhow::Result;
 
 pub struct Mmap {
     inner: memmap2::Mmap,
@@ -8,12 +9,12 @@ pub struct Mmap {
 }
 
 impl Mmap {
-    pub fn new(file: &File, len: u64, free_sender: Sender<u64>) -> Mmap {
-        Mmap {
-            inner: unsafe { memmap2::Mmap::map(file).unwrap() },
+    pub fn new(file: &File, len: u64, free_sender: Sender<u64>) -> Result<Mmap> {
+        Ok(Mmap {
+            inner: unsafe { memmap2::Mmap::map(file)? },
             len,
             free_sender,
-        }
+        })
     }
 }
 
@@ -28,5 +29,3 @@ impl Drop for Mmap {
         let _ = self.free_sender.send(self.len);
     }
 }
-
-//let input_blob : Blob = Arc::new(unsafe { Mmap::map(&input_file).unwrap() });

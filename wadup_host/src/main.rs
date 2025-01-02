@@ -3,6 +3,7 @@ TODO:
   - Not yet processing new data output from modules, only carved data
   - Track lineage what metadata was derived from what file; what file was derived from what file; etc.
   - Limit recursion
+  - Have a list of submitted jobs and channel to signal which jobs are complete (removing jobs as they complete)
  */
 
 #![feature(try_blocks)]
@@ -95,10 +96,6 @@ fn main() -> Result<()> {
 
     let (sender, receiver) = crossbeam::channel::unbounded::<JobOrDie>();
 
-    // TODO:
-    //  - Tracking state like this is clever, but probably want a locking state object for display purposes
-    //  - Alternatively, could use have a list of submitted jobs and channel to signal which jobs are complete (removing jobs as they complete)
-
     let waiting = &AtomicU64::new(0);
     let started = &AtomicBool::new(false);
     let thread_count = 5usize; // TODO: test for <= 64 (allow an extra bit to allow calculation of the next value)
@@ -121,7 +118,7 @@ fn main() -> Result<()> {
                             if started.load(Relaxed) {
                                 println!("thread {}: all receivers waiting, sending die!!", thread_index);
                                 for _ in 0..thread_count {
-                                    sender.send(JobOrDie::Die).unwrap(); // TODO: Remove unwrap
+                                    let _ = sender.send(JobOrDie::Die);
                                 }
                                 return;
                             } else {
@@ -135,8 +132,10 @@ fn main() -> Result<()> {
                         Ok(JobOrDie::Job(job)) => {
                             waiting.fetch_and(all_waiting - thread_mask, Relaxed);
                             started.store(true, Relaxed);
-                            println!("thread {}: processing job {} {}", thread_index, job.module_name, job.file_name);
-                            process(job).unwrap(); // TODO: Remove unwrap
+                            println!("thread {}: processing job {} {}", thread_index, &job.module_name, &job.file_name);
+                            if let Err(err) = process(job) {
+                                println!("thread error {}: {}", thread_index, err);
+                            }
                         },
                         _ => {
                             println!("thread: {} terminating", thread_index);
@@ -160,7 +159,7 @@ fn main() -> Result<()> {
                 }
 
                 mapped += input_len;
-                let input_blob : Blob = Arc::new(Mmap::new(&input_file, input_len, free_sender.clone()));
+                let input_blob : Blob = Arc::new(Mmap::new(&input_file, input_len, free_sender.clone())?);
 
                 for (module_name, module) in &*modules {
                     sender.send(JobOrDie::Job(Job {
