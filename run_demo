@@ -20,4 +20,4 @@ cp wadup_module_rust_2/target/wasm32-unknown-unknown/release/wadup_module_rust_2
 cp wadup_host/target/release/wadup_host demo/wadup
 
 cd demo
-./wadup --input data --modules modules --fuel 100000 --memory 10000000 --table 10000 --mapped 100000
+./wadup --input data --modules modules --fuel 100000 --memory 10000000 --table 10000 --mapped 100000 --threads 5

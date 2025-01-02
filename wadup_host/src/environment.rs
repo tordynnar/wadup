@@ -24,6 +24,9 @@ pub struct Cli {
 
     #[arg(long)]
     pub mapped: u64,
+
+    #[arg(long)]
+    pub threads: usize,
 }
 
 pub struct Environment {

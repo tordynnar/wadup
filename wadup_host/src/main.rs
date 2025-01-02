@@ -13,7 +13,7 @@ use std::fs::{self, File};
 use std::thread;
 use std::sync::atomic::{AtomicU64, AtomicBool};
 use std::sync::atomic::Ordering::Relaxed;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
 mod bindings;
 mod carve;
@@ -40,7 +40,10 @@ fn main() -> Result<()> {
 
     let waiting = &AtomicU64::new(0);
     let started = &AtomicBool::new(false);
-    let thread_count = 5usize; // TODO: test for <= 64 (allow an extra bit to allow calculation of the next value)
+    let thread_count = environment.args.threads;
+    if thread_count > 64 {
+        return Err(anyhow!("Up to 64 threads are supported"));
+    }
     let all_waiting = if thread_count == 64 {
         0xffffffffffffffff
     } else {
