@@ -5,6 +5,7 @@ TODO:
   - Limit recursion
  */
 
+#![feature(try_blocks)]
 
 use std::sync::Arc;
 use std::path::PathBuf;
@@ -150,30 +151,37 @@ fn main() -> Result<()> {
         let mut mapped = 0u64;
 
         for input_path in input_paths {
-            let input_file = File::open(&input_path).unwrap(); // TODO: remove unwrap
-            
-            let input_len = input_file.metadata().unwrap().len(); // TODO: remove unwrap
-            while mapped + input_len > args.mapped {
-                mapped -= free_receiver.recv().unwrap(); // TODO: remove unwrap
-            }
+            let result : Result<()> = try {
+                let input_file = File::open(&input_path)?;
+                
+                let input_len = input_file.metadata()?.len();
+                while mapped + input_len > args.mapped {
+                    mapped -= free_receiver.recv()?;
+                }
 
-            mapped += input_len;
-            let input_blob : Blob = Arc::new(Mmap::new(&input_file, input_len, free_sender.clone())); // TODO: remove unwrap
+                mapped += input_len;
+                let input_blob : Blob = Arc::new(Mmap::new(&input_file, input_len, free_sender.clone()));
 
-            for (module_name, module) in &*modules {
-                sender.send(JobOrDie::Job(Job {
-                    sender: sender.clone(),
-                    engine: engine.clone(),
-                    linker: linker.clone(),
-                    modules: modules.clone(),
-                    module: module.clone(),
-                    module_name: module_name.clone(),
-                    file_name: input_path.as_os_str().to_str().unwrap_or("").to_owned(), // TODO: remove unwrap
-                    blob: input_blob.clone(),
-                    fuel: args.fuel,
-                    memory: args.memory,
-                    table: args.table,
-                })).unwrap(); // TODO: remove unwrap
+                for (module_name, module) in &*modules {
+                    sender.send(JobOrDie::Job(Job {
+                        sender: sender.clone(),
+                        engine: engine.clone(),
+                        linker: linker.clone(),
+                        modules: modules.clone(),
+                        module: module.clone(),
+                        module_name: module_name.clone(),
+                        file_name: input_path.as_os_str().to_str().unwrap_or("").to_owned(),
+                        blob: input_blob.clone(),
+                        fuel: args.fuel,
+                        memory: args.memory,
+                        table: args.table,
+                    }))?;
+                }
+
+                ()
+            };
+            if let Err(err) = result {
+                println!("Failed to create job from {}: {}", input_path.as_os_str().to_str().unwrap_or(""), err);
             }
         }
     });
