@@ -5,8 +5,6 @@ TODO:
   - Limit recursion
  */
 
-#![feature(get_many_mut)]
-#![allow(dead_code)]
 
 use std::sync::Arc;
 use std::path::PathBuf;
