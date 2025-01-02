@@ -42,6 +42,8 @@ fn main() -> Result<()> {
     let waiting = &AtomicU64::new(0);
     let started = &AtomicBool::new(false); // TODO: Can started be a thread local, non-atomic value?? Answer: No, if a thread starts, processes a job and finishes before any other thread starts, then it locks
     // BUG: What if a thread starts, processes a job and finishes before any other thread has started; and the started.store(true) hasn't registered yet - then it locks right? Unlikely, but possible
+    // TODO: Should there be a watchdog thread instead, waiting to terminate all threads when they are idle?
+    // TODO: Can the files be pre-queued before starting the processing threads
     let thread_count = environment.args.threads;
     if thread_count > 64 {
         return Err(anyhow!("Up to 64 threads are supported"));
