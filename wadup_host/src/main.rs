@@ -3,35 +3,35 @@ TODO:
   - Not yet processing new data output from modules, only carved data
   - Track lineage what metadata was derived from what file; what file was derived from what file; etc.
   - Limit recursion
-  - Split this code into multiple file
  */
 
 #![feature(get_many_mut)]
 #![allow(dead_code)]
 
-use job::{process, Job, JobOrDie};
-use wasmtime::{Config, Engine, Linker};
-use anyhow::Result;
 use std::sync::Arc;
 use std::path::PathBuf;
 use std::fs::{self, File};
-use clap::Parser;
-use memmap2::Mmap;
 use std::thread;
 use std::sync::atomic::{AtomicU64, AtomicBool};
 use std::sync::atomic::Ordering::Relaxed;
+use clap::Parser;
+use wasmtime::{Config, Engine, Linker};
+use anyhow::Result;
 
-mod types;
+mod bindings;
 mod carve;
 mod context;
-mod bindings;
-mod load;
 mod job;
+mod load;
+mod types;
+mod mmap;
 
-use types::Blob;
-use context::Context;
 use bindings::add_to_linker;
+use context::Context;
+use job::{process, Job, JobOrDie};
 use load::load_module;
+use types::Blob;
+use mmap::Mmap;
 
 #[derive(Debug)]
 pub enum DataValue {
@@ -58,6 +58,9 @@ struct Cli {
 
     #[arg(long)]
     table: usize,
+
+    #[arg(long)]
+    mapped: u64,
 }
 
 fn main() -> Result<()> {
@@ -145,21 +148,29 @@ fn main() -> Result<()> {
             });
         }
 
+        let (free_sender, free_receiver) = crossbeam::channel::unbounded::<u64>();
+        let mut mapped = 0u64;
+
         for input_path in input_paths {
             let input_file = File::open(&input_path).unwrap(); // TODO: remove unwrap
-            // TODO: Check size and only start the queue if we won't exceed maximum mmap'd files
-            let input_blob : Blob = Arc::new(unsafe { Mmap::map(&input_file).unwrap() }); // TODO: remove unwrap
+            
+            let input_len = input_file.metadata().unwrap().len(); // TODO: remove unwrap
+            while mapped + input_len > args.mapped {
+                mapped -= free_receiver.recv().unwrap(); // TODO: remove unwrap
+            }
+
+            mapped += input_len;
+            let input_blob : Blob = Arc::new(Mmap::new(&input_file, input_len, free_sender.clone())); // TODO: remove unwrap
+
             for (module_name, module) in &*modules {
                 sender.send(JobOrDie::Job(Job {
-                    // These could be all in one Arc<> ... Arc<Environment>??
                     sender: sender.clone(),
                     engine: engine.clone(),
                     linker: linker.clone(),
                     modules: modules.clone(),
-
                     module: module.clone(),
                     module_name: module_name.clone(),
-                    file_name: input_path.as_os_str().to_str().unwrap().to_owned(), // TODO: remove unwrap
+                    file_name: input_path.as_os_str().to_str().unwrap_or("").to_owned(), // TODO: remove unwrap
                     blob: input_blob.clone(),
                     fuel: args.fuel,
                     memory: args.memory,
