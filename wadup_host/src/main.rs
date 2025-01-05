@@ -52,7 +52,7 @@ fn main() -> Result<()> {
 
     for (_file_path, file_jobs) in &jobs {
         for (info, _module) in file_jobs {
-            let _ = tracking_sender.send(JobTracking::JobInfo(info.clone()));
+            tracking_sender.send(JobTracking::JobInfo(info.clone())).unwrap();
         }
     }
 
@@ -72,7 +72,7 @@ fn main() -> Result<()> {
                         job_ids.remove(&result.id);
                         if job_ids.len() == 0 {
                             for _ in 0..thread_count {
-                                let _ = job_sender_2.send(JobOrDie::Die);
+                                job_sender_2.send(JobOrDie::Die).unwrap();
                             }
                             return;
                         }
@@ -93,7 +93,7 @@ fn main() -> Result<()> {
                         Ok(JobOrDie::Job(job)) => {
                             let job_id = job.info.id;
                             //println!("thread {}: processing job {} {:?}", thread_index, &job.info.module_name, &job.info.file_path);
-                            let _ = tracking_sender.send(JobTracking::JobResult(match process(job) {
+                            tracking_sender.send(JobTracking::JobResult(match process(job) {
                                 Ok(result) => result,
                                 Err(err) => {
                                     let error = format!("thread error {}: {}", thread_index, err);
@@ -103,7 +103,7 @@ fn main() -> Result<()> {
                                         error: Some(error),
                                     }
                                 },
-                            }));
+                            })).unwrap();
                         },
                         _ => {
                             //println!("thread: {} terminating", thread_index);
@@ -134,31 +134,24 @@ fn main() -> Result<()> {
             match result {
                 Ok(input_blob) => {
                     for (info, module) in file_jobs {
-                        if let Err(err) = job_sender.send(JobOrDie::Job(Job {
+                        job_sender.send(JobOrDie::Job(Job {
                             info: info.clone(),
                             job_sender: job_sender.clone(),
                             tracking_sender: tracking_sender.clone(),
                             environment: environment.clone(),
                             module: module.clone(),
                             blob: input_blob.clone(),
-                        })) {
-                            let error = format!("Failed to send job {:?}: {}", info, err);
-                            let _ = tracking_sender.send(JobTracking::JobResult(JobResult {
-                                id: info.id,
-                                message: None,
-                                error: Some(error.clone()),
-                            }));
-                        }
+                        })).unwrap();
                     }
                 },
                 Err(err) => {
                     let error = format!("Failed to create jobs from {:?}: {}", file_path, err);
                     for (info, _module) in file_jobs {
-                        let _ = tracking_sender.send(JobTracking::JobResult(JobResult {
+                        tracking_sender.send(JobTracking::JobResult(JobResult {
                             id: info.id,
                             message: None,
                             error: Some(error.clone()),
-                        }));
+                        })).unwrap();
                     }
                 }
             }
