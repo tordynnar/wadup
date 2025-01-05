@@ -85,13 +85,20 @@ fn main() -> Result<()> {
 
         for thread_index in 0..thread_count {
             let job_receiver = job_receiver.clone();
+            let tracking_sender = tracking_sender.clone();
             s.spawn(move || {
                 loop {
                     match job_receiver.recv() {
                         Ok(JobOrDie::Job(job)) => {
+                            let job_id = job.info.id;
                             println!("thread {}: processing job {} {:?}", thread_index, &job.info.module_name, &job.info.file_path);
                             if let Err(err) = process(job) {
-                                println!("thread error {}: {}", thread_index, err);
+                                let error = format!("thread error {}: {}", thread_index, err);
+                                let _ = tracking_sender.send(JobTracking::JobResult(JobResult {
+                                    id: job_id,
+                                    message: None,
+                                    error: Some(error),
+                                }));
                             }
                         },
                         _ => {
