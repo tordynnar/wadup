@@ -1,23 +1,47 @@
+#![allow(dead_code)]
+
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossbeam::channel::Sender;
 use wasmtime::{Module, Store, Trap};
 use anyhow::Result;
+use uuid::Uuid;
 
-use crate::{context::Context, types::Blob, environment::Environment};
+use crate::context::Context;
+use crate::types::Blob;
+use crate::environment::Environment;
 
 pub enum JobOrDie {
     Job(Job),
     Die,
 }
 
+#[derive(Clone, Debug)]
+pub struct JobInfo {
+    pub id: Uuid,
+    pub module_name: String,
+    pub file_path: Option<PathBuf>,
+}
+
+#[derive(Clone)]
+pub struct JobResult {
+    pub id: Uuid,
+    pub error: Option<String>,
+}
+
+pub enum JobTracking {
+    JobInfo(JobInfo),
+    JobResult(JobResult),
+}
+
 #[derive(Clone)]
 pub struct Job {
-    pub sender: Sender<JobOrDie>,
+    pub info: JobInfo, 
+    pub job_sender: Sender<JobOrDie>,
+    pub tracking_sender: Sender<JobTracking>,
     pub environment: Arc<Environment>,
     pub module: Arc<Module>,
-    pub module_name: String,
-    pub file_name: String,
     pub blob: Blob,
 }
 
@@ -56,7 +80,7 @@ pub fn process(job: Job) -> Result<()> {
     let fuel_end = store.get_fuel()?;
     let fuel_used = job.environment.args.fuel - fuel_end;
 
-    println!("{} {} memory used: {}, table used: {}, fuel used: {}", job.module_name, job.file_name, store.data().memory_used, store.data().table_used, fuel_used);
+    println!("{} {:?} memory used: {}, table used: {}, fuel used: {}", job.info.module_name, job.info.file_path, store.data().memory_used, store.data().table_used, fuel_used);
 
     Ok(())
 }

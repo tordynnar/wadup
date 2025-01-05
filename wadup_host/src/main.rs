@@ -8,12 +8,12 @@ TODO:
 
 #![feature(try_blocks)]
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::fs::{self, File};
 use std::thread;
-use std::sync::atomic::{AtomicU64, AtomicBool};
-use std::sync::atomic::Ordering::Relaxed;
 use anyhow::{Result, anyhow};
+use uuid::Uuid;
 
 mod bindings;
 mod carve;
@@ -24,80 +24,67 @@ mod load;
 mod types;
 mod mmap;
 
-use crossbeam::channel::TryRecvError;
 use environment::Environment;
-use job::{process, Job, JobOrDie};
+use job::{process, Job, JobInfo, JobOrDie, JobResult, JobTracking};
 use types::Blob;
 use mmap::Mmap;
 
 fn main() -> Result<()> {
+    let (job_sender, job_receiver) = crossbeam::channel::unbounded::<JobOrDie>();
+    let (tracking_sender, tracking_receiver) = crossbeam::channel::unbounded::<JobTracking>();
+    let (free_sender, free_receiver) = crossbeam::channel::unbounded::<u64>();
+
     let environment = Arc::new(Environment::create()?);
-    
-    let input_paths = fs::read_dir(&environment.args.input)?
+
+    let file_paths = fs::read_dir(&environment.args.input)?
         .filter_map(|p| p.ok() )
         .map(|p| p.path());
 
-    let (sender, receiver) = crossbeam::channel::unbounded::<JobOrDie>();
 
-    let waiting = &AtomicU64::new(0);
-    let started = &AtomicBool::new(false); // TODO: Can started be a thread local, non-atomic value?? Answer: No, if a thread starts, processes a job and finishes before any other thread starts, then it locks
-    // BUG: What if a thread starts, processes a job and finishes before any other thread has started; and the started.store(true) hasn't registered yet - then it locks right? Unlikely, but possible
-    // TODO: Should there be a watchdog thread instead, waiting to terminate all threads when they are idle?
-    // TODO: Can the files be pre-queued before starting the processing threads
-    let thread_count = environment.args.threads;
-    if thread_count > 64 {
-        return Err(anyhow!("Up to 64 threads are supported"));
+    let jobs = file_paths.map(|file_path| {
+        (file_path.clone(), environment.modules.iter().map(move |(module_name, module)| {
+            (JobInfo {
+                id: Uuid::new_v4(),
+                module_name: module_name.clone(),
+                file_path: Some(file_path.clone()),
+            }, module.clone())
+        }).collect::<Vec<_>>())
+    }).collect::<Vec<_>>();
+
+    for (_file_path, file_jobs) in &jobs {
+        for (info, _module) in file_jobs {
+            let _ = tracking_sender.send(JobTracking::JobInfo(info.clone()));
+        }
     }
-    let all_waiting = if thread_count == 64 {
-        0xffffffffffffffff
-    } else {
-        (1u64 << thread_count) - 1
-    };
 
     thread::scope(|s| {
-        for thread_index in 0..thread_count {
-            let thread_mask = 1u64 << thread_index;
-            let sender = sender.clone();
-            let receiver = receiver.clone();
+        s.spawn(move || {
+            let mut job_ids = HashSet::<Uuid>::new();
+            loop {
+                match tracking_receiver.recv() {
+                    Ok(JobTracking::JobInfo(info)) => {
+                        job_ids.insert(info.id);
+                        println!("*** SET: {:?}", job_ids);
+                    },
+                    Ok(JobTracking::JobResult(result)) => {
+                        job_ids.remove(&result.id);
+                        println!("*** SET: {:?}", job_ids);
+                    },
+                    Err(_) => {
+                        println!("*** TRACKER ERROR ***");
+                        break;
+                    },
+                }
+            }
+        });
+
+        for thread_index in 0..environment.args.threads {
+            let job_receiver = job_receiver.clone();
             s.spawn(move || {
                 loop {
-                    let job_or_die = match receiver.try_recv() {
-                        Ok(job_or_die) => {
-                            job_or_die
-                        },
-                        Err(TryRecvError::Disconnected) => {
-                            JobOrDie::Die
-                        }
-                        Err(TryRecvError::Empty) => {
-                            println!("thread {}: no job in queue", thread_index);
-                            if waiting.fetch_or(thread_mask, Relaxed) | thread_mask == all_waiting {
-                                if started.load(Relaxed) {
-                                    println!("thread {}: all receivers waiting, sending die!!", thread_index);
-                                    for _ in 0..thread_count {
-                                        let _ = sender.send(JobOrDie::Die);
-                                    }
-                                    return;
-                                } else {
-                                    println!("thread {}: all receivers waiting, but haven't received first job yet", thread_index)
-                                }
-                            }
-
-                            match receiver.recv() {
-                                Ok(job_or_die) => {
-                                    job_or_die
-                                },
-                                Err(_) => {
-                                    JobOrDie::Die
-                                }
-                            }
-                        }
-                    };
-
-                    match job_or_die {
-                        JobOrDie::Job(job) => {
-                            waiting.fetch_and(all_waiting - thread_mask, Relaxed);
-                            started.store(true, Relaxed);
-                            println!("thread {}: processing job {} {}", thread_index, &job.module_name, &job.file_name);
+                    match job_receiver.recv() {
+                        Ok(JobOrDie::Job(job)) => {
+                            println!("thread {}: processing job {} {:?}", thread_index, &job.info.module_name, &job.info.file_path);
                             if let Err(err) = process(job) {
                                 println!("thread error {}: {}", thread_index, err);
                             }
@@ -111,39 +98,50 @@ fn main() -> Result<()> {
             });
         }
 
-        let (free_sender, free_receiver) = crossbeam::channel::unbounded::<u64>();
         let mut mapped = 0u64;
-
-        for input_path in input_paths {
+        for (file_path, file_jobs) in &jobs {
             let result : Result<()> = try {
-                let input_file = File::open(&input_path)?;
+                let file_handle = File::open(&file_path)?;
                 
-                let input_len = input_file.metadata()?.len();
-                if input_len > environment.args.mapped {
-                    Err(anyhow!("File {} larger than maximum mapped memory", input_path.as_os_str().to_str().unwrap_or("")))?;
+                let file_len = file_handle.metadata()?.len();
+                if file_len > environment.args.mapped {
+                    Err(anyhow!("File {:?} larger than maximum mapped memory", file_path))?;
                 }
-                while mapped + input_len > environment.args.mapped {
+                while mapped + file_len > environment.args.mapped {
                     mapped -= free_receiver.recv()?;
                 }
 
-                mapped += input_len;
-                let input_blob : Blob = Arc::new(Mmap::new(&input_file, input_len, free_sender.clone())?);
+                mapped += file_len;
+                let input_blob : Blob = Arc::new(Mmap::new(&file_handle, file_len, free_sender.clone())?);
 
-                for (module_name, module) in &*environment.modules {
-                    sender.send(JobOrDie::Job(Job {
-                        sender: sender.clone(),
+                for (info, module) in file_jobs {
+                    if let Err(err) = job_sender.send(JobOrDie::Job(Job {
+                        info: info.clone(),
+                        job_sender: job_sender.clone(),
+                        tracking_sender: tracking_sender.clone(),
                         environment: environment.clone(),
                         module: module.clone(),
-                        module_name: module_name.clone(),
-                        file_name: input_path.as_os_str().to_str().unwrap_or("").to_owned(),
                         blob: input_blob.clone(),
-                    }))?;
+                    })) {
+                        let error = format!("Failed to send job {:?}: {}", info, err);
+                        let _ = tracking_sender.send(JobTracking::JobResult(JobResult {
+                            id: info.id,
+                            error: Some(error.clone()),
+                        }));
+                    }
                 }
             };
             if let Err(err) = result {
-                println!("Failed to create job from {}: {}", input_path.as_os_str().to_str().unwrap_or(""), err);
+                let error = format!("Failed to create jobs from {:?}: {}", file_path, err);
+                for (info, _module) in file_jobs {
+                    let _ = tracking_sender.send(JobTracking::JobResult(JobResult {
+                        id: info.id,
+                        error: Some(error.clone()),
+                    }));
+                }
             }
         }
+        
     });
 
     Ok(())
