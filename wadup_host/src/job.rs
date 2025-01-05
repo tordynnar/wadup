@@ -27,6 +27,7 @@ pub struct JobInfo {
 #[derive(Clone)]
 pub struct JobResult {
     pub id: Uuid,
+    pub message: Option<String>,
     pub error: Option<String>,
 }
 
@@ -80,7 +81,13 @@ pub fn process(job: Job) -> Result<()> {
     let fuel_end = store.get_fuel()?;
     let fuel_used = job.environment.args.fuel - fuel_end;
 
-    println!("{} {:?} memory used: {}, table used: {}, fuel used: {}", job.info.module_name, job.info.file_path, store.data().memory_used, store.data().table_used, fuel_used);
+    let message = format!("{} {:?} memory used: {}, table used: {}, fuel used: {}", job.info.module_name, job.info.file_path, store.data().memory_used, store.data().table_used, fuel_used);
+    let _ = job.tracking_sender.send(JobTracking::JobResult(JobResult {
+        id: job.info.id,
+        message: Some(message),
+        error: None,
+    }));
+    
 
     Ok(())
 }

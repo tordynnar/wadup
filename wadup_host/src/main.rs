@@ -57,28 +57,34 @@ fn main() -> Result<()> {
         }
     }
 
+    let thread_count = environment.args.threads;
+
     thread::scope(|s| {
+        let job_sender_2 = job_sender.clone();
         s.spawn(move || {
             let mut job_ids = HashSet::<Uuid>::new();
             loop {
                 match tracking_receiver.recv() {
                     Ok(JobTracking::JobInfo(info)) => {
                         job_ids.insert(info.id);
-                        println!("*** SET: {:?}", job_ids);
                     },
                     Ok(JobTracking::JobResult(result)) => {
                         job_ids.remove(&result.id);
-                        println!("*** SET: {:?}", job_ids);
+                        if job_ids.len() == 0 {
+                            for _ in 0..thread_count {
+                                let _ = job_sender_2.send(JobOrDie::Die);
+                            }
+                            return;
+                        }
                     },
                     Err(_) => {
-                        println!("*** TRACKER ERROR ***");
-                        break;
+                        return;
                     },
                 }
             }
         });
 
-        for thread_index in 0..environment.args.threads {
+        for thread_index in 0..thread_count {
             let job_receiver = job_receiver.clone();
             s.spawn(move || {
                 loop {
@@ -126,6 +132,7 @@ fn main() -> Result<()> {
                         let error = format!("Failed to send job {:?}: {}", info, err);
                         let _ = tracking_sender.send(JobTracking::JobResult(JobResult {
                             id: info.id,
+                            message: None,
                             error: Some(error.clone()),
                         }));
                     }
@@ -136,6 +143,7 @@ fn main() -> Result<()> {
                 for (info, _module) in file_jobs {
                     let _ = tracking_sender.send(JobTracking::JobResult(JobResult {
                         id: info.id,
+                        message: None,
                         error: Some(error.clone()),
                     }));
                 }

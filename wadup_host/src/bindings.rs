@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::{carve::Carve, types::DataValue};
 use crate::context::Context;
-use crate::job::{JobOrDie, Job, JobInfo};
+use crate::job::{Job, JobInfo, JobOrDie, JobTracking};
 
 pub fn wadup_read(data: &[u8], mut caller: Caller<'_, Context>, buffer: u32, offset: u64, length: u32) -> Result<u32> {
     let memory = caller.get_export("memory").and_then(|v| v.into_memory()).ok_or(anyhow!("wadup_read memory not exported"))?;
@@ -33,18 +33,20 @@ pub fn wadup_input_carve(caller: Caller<'_, Context>, offset: u64, length: u64) 
     let length = usize::try_from(length).map_err(|_| anyhow!("wadup_input_carve length u64 to usize conversion failed"))?;
     let carve = Arc::new(Carve::new(caller.data().input.clone(), offset, length)?);
     for (module_name, module) in &*caller.data().job.environment.modules {
-        caller.data().job.job_sender.send(JobOrDie::Job(Job {
-            info: JobInfo {
-                id: Uuid::new_v4(),
-                module_name: module_name.clone(),
-                file_path: None,
-            },
+        let info = JobInfo {
+            id: Uuid::new_v4(),
+            module_name: module_name.clone(),
+            file_path: None,
+        };
+        let _ = caller.data().job.tracking_sender.send(JobTracking::JobInfo(info.clone()));
+        let _ = caller.data().job.job_sender.send(JobOrDie::Job(Job {
+            info,
             job_sender: caller.data().job.job_sender.clone(),
             tracking_sender: caller.data().job.tracking_sender.clone(),
             environment: caller.data().job.environment.clone(),
             module: module.clone(),
             blob: carve.clone(),
-        }))?;
+        }));
     }
     Ok(())
 }
