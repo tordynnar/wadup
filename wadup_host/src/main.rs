@@ -92,14 +92,17 @@ fn main() -> Result<()> {
                         Ok(JobOrDie::Job(job)) => {
                             let job_id = job.info.id;
                             println!("thread {}: processing job {} {:?}", thread_index, &job.info.module_name, &job.info.file_path);
-                            if let Err(err) = process(job) {
-                                let error = format!("thread error {}: {}", thread_index, err);
-                                let _ = tracking_sender.send(JobTracking::JobResult(JobResult {
-                                    id: job_id,
-                                    message: None,
-                                    error: Some(error),
-                                }));
-                            }
+                            let _ = tracking_sender.send(JobTracking::JobResult(match process(job) {
+                                Ok(result) => result,
+                                Err(err) => {
+                                    let error = format!("thread error {}: {}", thread_index, err);
+                                    JobResult {
+                                        id: job_id,
+                                        message: None,
+                                        error: Some(error),
+                                    }
+                                },
+                            }));
                         },
                         _ => {
                             println!("thread: {} terminating", thread_index);

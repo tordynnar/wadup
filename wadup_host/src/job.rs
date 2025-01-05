@@ -46,7 +46,7 @@ pub struct Job {
     pub blob: Blob,
 }
 
-pub fn process(job: Job) -> Result<()> {
+pub fn process(job: Job) -> Result<JobResult> {
     let mut store = Store::new(&job.environment.engine, Context {
         job: job.clone(),
         input: job.blob,
@@ -82,12 +82,9 @@ pub fn process(job: Job) -> Result<()> {
     let fuel_used = job.environment.args.fuel - fuel_end;
 
     let message = format!("{} {:?} memory used: {}, table used: {}, fuel used: {}", job.info.module_name, job.info.file_path, store.data().memory_used, store.data().table_used, fuel_used);
-    let _ = job.tracking_sender.send(JobTracking::JobResult(JobResult {
+    Ok(JobResult {
         id: job.info.id,
         message: Some(message),
         error: None,
-    }));
-    
-
-    Ok(())
+    })
 }
