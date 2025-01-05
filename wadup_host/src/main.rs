@@ -3,7 +3,6 @@ TODO:
   - Not yet processing new data output from modules, only carved data
   - Track lineage what metadata was derived from what file; what file was derived from what file; etc.
   - Limit recursion
-  - Have a list of submitted jobs and channel to signal which jobs are complete (removing jobs as they complete)
  */
 
 #![feature(try_blocks)]
