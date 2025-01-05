@@ -68,6 +68,7 @@ fn main() -> Result<()> {
                         job_ids.insert(info.id);
                     },
                     Ok(JobTracking::JobResult(result)) => {
+                        println!("RESULT: {:?}", result);
                         job_ids.remove(&result.id);
                         if job_ids.len() == 0 {
                             for _ in 0..thread_count {
@@ -91,7 +92,7 @@ fn main() -> Result<()> {
                     match job_receiver.recv() {
                         Ok(JobOrDie::Job(job)) => {
                             let job_id = job.info.id;
-                            println!("thread {}: processing job {} {:?}", thread_index, &job.info.module_name, &job.info.file_path);
+                            //println!("thread {}: processing job {} {:?}", thread_index, &job.info.module_name, &job.info.file_path);
                             let _ = tracking_sender.send(JobTracking::JobResult(match process(job) {
                                 Ok(result) => result,
                                 Err(err) => {
@@ -105,7 +106,7 @@ fn main() -> Result<()> {
                             }));
                         },
                         _ => {
-                            println!("thread: {} terminating", thread_index);
+                            //println!("thread: {} terminating", thread_index);
                             return;
                         }
                     }
@@ -115,7 +116,7 @@ fn main() -> Result<()> {
 
         let mut mapped = 0u64;
         for (file_path, file_jobs) in &jobs {
-            let result : Result<()> = try {
+            let result : Result<Blob> = try {
                 let file_handle = File::open(&file_path)?;
                 
                 let file_len = file_handle.metadata()?.len();
@@ -128,33 +129,37 @@ fn main() -> Result<()> {
 
                 mapped += file_len;
                 let input_blob : Blob = Arc::new(Mmap::new(&file_handle, file_len, free_sender.clone())?);
-
-                for (info, module) in file_jobs {
-                    if let Err(err) = job_sender.send(JobOrDie::Job(Job {
-                        info: info.clone(),
-                        job_sender: job_sender.clone(),
-                        tracking_sender: tracking_sender.clone(),
-                        environment: environment.clone(),
-                        module: module.clone(),
-                        blob: input_blob.clone(),
-                    })) {
-                        let error = format!("Failed to send job {:?}: {}", info, err);
+                input_blob
+            };
+            match result {
+                Ok(input_blob) => {
+                    for (info, module) in file_jobs {
+                        if let Err(err) = job_sender.send(JobOrDie::Job(Job {
+                            info: info.clone(),
+                            job_sender: job_sender.clone(),
+                            tracking_sender: tracking_sender.clone(),
+                            environment: environment.clone(),
+                            module: module.clone(),
+                            blob: input_blob.clone(),
+                        })) {
+                            let error = format!("Failed to send job {:?}: {}", info, err);
+                            let _ = tracking_sender.send(JobTracking::JobResult(JobResult {
+                                id: info.id,
+                                message: None,
+                                error: Some(error.clone()),
+                            }));
+                        }
+                    }
+                },
+                Err(err) => {
+                    let error = format!("Failed to create jobs from {:?}: {}", file_path, err);
+                    for (info, _module) in file_jobs {
                         let _ = tracking_sender.send(JobTracking::JobResult(JobResult {
                             id: info.id,
                             message: None,
                             error: Some(error.clone()),
                         }));
                     }
-                }
-            };
-            if let Err(err) = result {
-                let error = format!("Failed to create jobs from {:?}: {}", file_path, err);
-                for (info, _module) in file_jobs {
-                    let _ = tracking_sender.send(JobTracking::JobResult(JobResult {
-                        id: info.id,
-                        message: None,
-                        error: Some(error.clone()),
-                    }));
                 }
             }
         }

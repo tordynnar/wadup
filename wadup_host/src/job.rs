@@ -24,7 +24,7 @@ pub struct JobInfo {
     pub file_path: Option<PathBuf>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct JobResult {
     pub id: Uuid,
     pub message: Option<String>,

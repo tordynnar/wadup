@@ -176,7 +176,7 @@ pub fn wadup_metadata_flush_row(caller: Caller<'_, Context>, schema_index: u32) 
     let column = column.get(&schema_index).ok_or_else(|| anyhow!("wadup_metadata_flush_row schema index not found"))?;
     for (column_name, column_index) in column {
         let value = metadata.get(&(schema_index, column_index.to_owned())).unwrap_or(&DataValue::NoneValue);
-        println!("{} {} {:?}", schema_name, column_name, value);
+        println!("DATA: {} {} {:?}", schema_name, column_name, value);
     }
     Ok(())
 }
