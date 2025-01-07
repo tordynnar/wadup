@@ -1,9 +1,7 @@
-#![allow(dead_code)]
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crossbeam::channel::Sender;
+use std::sync::mpmc::Sender;
 use wasmtime::{Module, Store, Trap};
 use anyhow::Result;
 use uuid::Uuid;
@@ -24,6 +22,7 @@ pub struct JobInfo {
     pub file_path: Option<PathBuf>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct JobResult {
     pub id: Uuid,

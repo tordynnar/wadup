@@ -1,5 +1,5 @@
 use std::fs::File;
-use crossbeam::channel::Sender;
+use std::sync::mpmc::Sender;
 use anyhow::Result;
 
 pub struct Mmap {
